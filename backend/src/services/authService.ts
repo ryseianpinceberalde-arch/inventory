@@ -9,10 +9,11 @@ import { findRefreshToken, persistRefreshToken, signAccessToken, signRefreshToke
 const cookieName = "smartstock_refresh";
 
 export function setRefreshCookie(res: Response, token: string) {
+  const isProduction = process.env.NODE_ENV === "production";
   res.cookie(cookieName, token, {
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "lax",
+    secure: isProduction,
+    sameSite: isProduction ? "none" : "lax",
     maxAge: 7 * 24 * 60 * 60 * 1000
   });
 }
