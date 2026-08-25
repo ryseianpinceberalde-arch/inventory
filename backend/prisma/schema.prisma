@@ -1,0 +1,516 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum RoleName {
+  ADMIN
+  MANAGER
+  CASHIER
+  INVENTORY_STAFF
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum ProductStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+enum MovementType {
+  STOCK_IN
+  SALE
+  STOCK_OUT
+  CUSTOMER_RETURN
+  SUPPLIER_RETURN
+  ADJUSTMENT
+  DAMAGED
+  EXPIRED
+  CANCELLED_SALE
+  REFUND
+}
+
+enum AdjustmentStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum SaleStatus {
+  COMPLETED
+  PENDING
+  HELD
+  CANCELLED
+  REFUNDED
+  PARTIALLY_REFUNDED
+}
+
+enum PaymentMethod {
+  CASH
+  GCASH
+  MAYA
+  BANK_TRANSFER
+  DEBIT_CARD
+  CREDIT_CARD
+  CUSTOMER_CREDIT
+  MIXED
+}
+
+enum NotificationPriority {
+  LOW
+  NORMAL
+  HIGH
+  CRITICAL
+}
+
+model Role {
+  id              String           @id @default(uuid()) @db.Uuid
+  name            String           @unique
+  description     String?
+  isSystem        Boolean          @default(false)
+  users           User[]
+  rolePermissions RolePermission[]
+  createdAt       DateTime         @default(now()) @db.Timestamptz
+  updatedAt       DateTime         @updatedAt @db.Timestamptz
+}
+
+model Permission {
+  id              String           @id @default(uuid()) @db.Uuid
+  key             String           @unique
+  name            String
+  module          String
+  description     String?
+  rolePermissions RolePermission[]
+  userPermissions UserPermission[]
+  createdAt       DateTime         @default(now()) @db.Timestamptz
+  updatedAt       DateTime         @updatedAt @db.Timestamptz
+}
+
+model RolePermission {
+  id           String     @id @default(uuid()) @db.Uuid
+  roleId       String     @db.Uuid
+  permissionId String     @db.Uuid
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, permissionId])
+}
+
+model UserPermission {
+  id           String     @id @default(uuid()) @db.Uuid
+  userId       String     @db.Uuid
+  permissionId String     @db.Uuid
+  user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, permissionId])
+}
+
+model User {
+  id                  String                @id @default(uuid()) @db.Uuid
+  roleId              String                @db.Uuid
+  fullName            String
+  email               String                @unique
+  passwordHash        String
+  phone               String?
+  status              UserStatus            @default(ACTIVE)
+  role                Role                  @relation(fields: [roleId], references: [id])
+  permissions         UserPermission[]
+  refreshTokens       RefreshToken[]
+  passwordResetTokens PasswordResetToken[]
+  sales               Sale[]                @relation("CashierSales")
+  stockReceipts       StockReceipt[]        @relation("ReceivedBy")
+  stockMovements      StockMovement[]       @relation("MovementEmployee")
+  requestedAdjustments InventoryAdjustment[] @relation("RequestedBy")
+  approvedAdjustments InventoryAdjustment[] @relation("ApprovedBy")
+  auditLogs           AuditLog[]
+  createdAt           DateTime              @default(now()) @db.Timestamptz
+  updatedAt           DateTime              @updatedAt @db.Timestamptz
+
+  @@index([roleId])
+}
+
+model Category {
+  id          String        @id @default(uuid()) @db.Uuid
+  name        String        @unique
+  description String?
+  status      ProductStatus @default(ACTIVE)
+  products    Product[]
+  createdAt   DateTime      @default(now()) @db.Timestamptz
+  updatedAt   DateTime      @updatedAt @db.Timestamptz
+}
+
+model Product {
+  id                 String              @id @default(uuid()) @db.Uuid
+  categoryId         String              @db.Uuid
+  primarySupplierId  String?             @db.Uuid
+  name               String
+  sku                String              @unique
+  barcode            String              @unique
+  description        String?
+  costPrice          Decimal             @db.Decimal(12, 2)
+  sellingPrice       Decimal             @db.Decimal(12, 2)
+  currentStock       Int                 @default(0)
+  reorderLevel       Int                 @default(0)
+  unit               String              @default("pcs")
+  imageUrl           String?
+  tracksExpiration   Boolean             @default(false)
+  status             ProductStatus       @default(ACTIVE)
+  category           Category            @relation(fields: [categoryId], references: [id])
+  primarySupplier    Supplier?           @relation(fields: [primarySupplierId], references: [id])
+  barcodes           ProductBarcode[]
+  supplierProducts   SupplierProduct[]
+  deliveryItems      SupplierDeliveryItem[]
+  stockReceiptItems  StockReceiptItem[]
+  stockMovements     StockMovement[]
+  adjustments        InventoryAdjustment[]
+  saleItems          SaleItem[]
+  heldSaleItems      HeldSaleItem[]
+  refundItems        RefundItem[]
+  notifications      Notification[]
+  createdAt          DateTime            @default(now()) @db.Timestamptz
+  updatedAt          DateTime            @updatedAt @db.Timestamptz
+  createdBy          String?             @db.Uuid
+
+  @@index([name])
+  @@index([sku])
+  @@index([barcode])
+  @@index([categoryId])
+  @@index([primarySupplierId])
+}
+
+model ProductBarcode {
+  id        String   @id @default(uuid()) @db.Uuid
+  productId String   @db.Uuid
+  code      String   @unique
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now()) @db.Timestamptz
+
+  @@index([code])
+}
+
+model Supplier {
+  id              String             @id @default(uuid()) @db.Uuid
+  name            String
+  contactPerson   String?
+  phone           String?
+  email           String?
+  address         String?
+  paymentTerms    String?
+  deliveryLeadTime Int?
+  status          ProductStatus      @default(ACTIVE)
+  notes           String?
+  products        Product[]
+  supplierProducts SupplierProduct[]
+  deliveries      SupplierDelivery[]
+  evaluations     SupplierEvaluation[]
+  createdAt       DateTime           @default(now()) @db.Timestamptz
+  updatedAt       DateTime           @updatedAt @db.Timestamptz
+
+  @@index([name])
+}
+
+model SupplierProduct {
+  id         String   @id @default(uuid()) @db.Uuid
+  supplierId String   @db.Uuid
+  productId  String   @db.Uuid
+  supplier   Supplier @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  product    Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([supplierId, productId])
+}
+
+model SupplierDelivery {
+  id            String                 @id @default(uuid()) @db.Uuid
+  referenceNo   String                 @unique
+  supplierId    String                 @db.Uuid
+  deliveryDate  DateTime               @db.Timestamptz
+  expectedDate  DateTime?              @db.Timestamptz
+  completedAt   DateTime?              @db.Timestamptz
+  notes         String?
+  totalAmount   Decimal                @default(0) @db.Decimal(12, 2)
+  supplier      Supplier               @relation(fields: [supplierId], references: [id])
+  items         SupplierDeliveryItem[]
+  createdAt     DateTime               @default(now()) @db.Timestamptz
+  updatedAt     DateTime               @updatedAt @db.Timestamptz
+
+  @@index([supplierId])
+}
+
+model SupplierDeliveryItem {
+  id          String           @id @default(uuid()) @db.Uuid
+  deliveryId  String           @db.Uuid
+  productId   String           @db.Uuid
+  quantity    Int
+  unitCost    Decimal          @db.Decimal(12, 2)
+  expirationDate DateTime?     @db.Timestamptz
+  batchNumber String?
+  delivery    SupplierDelivery @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+  product     Product          @relation(fields: [productId], references: [id])
+}
+
+model SupplierEvaluation {
+  id                        String   @id @default(uuid()) @db.Uuid
+  supplierId                String   @db.Uuid
+  onTimeDeliveryPercentage  Decimal  @default(0) @db.Decimal(5, 2)
+  correctQuantityPercentage Decimal  @default(0) @db.Decimal(5, 2)
+  productQualityScore       Decimal  @default(0) @db.Decimal(5, 2)
+  returnRate                Decimal  @default(0) @db.Decimal(5, 2)
+  averageDeliveryDuration   Decimal  @default(0) @db.Decimal(8, 2)
+  completedDeliveryCount    Int      @default(0)
+  performanceScore          Decimal  @default(0) @db.Decimal(5, 2)
+  supplier                  Supplier @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  createdAt                 DateTime @default(now()) @db.Timestamptz
+
+  @@index([supplierId])
+}
+
+model Customer {
+  id             String        @id @default(uuid()) @db.Uuid
+  fullName       String
+  phone          String?
+  email          String?
+  address        String?
+  customerType   String        @default("Walk-in")
+  loyaltyPoints  Int           @default(0)
+  creditBalance  Decimal       @default(0) @db.Decimal(12, 2)
+  birthday       DateTime?     @db.Date
+  notes          String?
+  status         ProductStatus @default(ACTIVE)
+  sales          Sale[]
+  createdAt      DateTime      @default(now()) @db.Timestamptz
+  updatedAt      DateTime      @updatedAt @db.Timestamptz
+
+  @@index([fullName])
+}
+
+model StockReceipt {
+  id          String             @id @default(uuid()) @db.Uuid
+  referenceNo String             @unique
+  supplierId  String             @db.Uuid
+  receivedById String            @db.Uuid
+  deliveryDate DateTime          @db.Timestamptz
+  notes       String?
+  totalAmount Decimal            @default(0) @db.Decimal(12, 2)
+  receivedBy  User              @relation("ReceivedBy", fields: [receivedById], references: [id])
+  items       StockReceiptItem[]
+  createdAt   DateTime          @default(now()) @db.Timestamptz
+
+  @@index([supplierId])
+}
+
+model StockReceiptItem {
+  id             String       @id @default(uuid()) @db.Uuid
+  stockReceiptId String       @db.Uuid
+  productId      String       @db.Uuid
+  quantity       Int
+  unitCost       Decimal      @db.Decimal(12, 2)
+  expirationDate DateTime?    @db.Timestamptz
+  batchNumber    String?
+  stockReceipt   StockReceipt @relation(fields: [stockReceiptId], references: [id], onDelete: Cascade)
+  product        Product      @relation(fields: [productId], references: [id])
+}
+
+model StockMovement {
+  id               String       @id @default(uuid()) @db.Uuid
+  productId        String       @db.Uuid
+  employeeId       String?      @db.Uuid
+  previousQuantity Int
+  quantityChanged  Int
+  newQuantity      Int
+  movementType     MovementType
+  referenceNo      String
+  reason           String?
+  product          Product      @relation(fields: [productId], references: [id])
+  employee         User?        @relation("MovementEmployee", fields: [employeeId], references: [id])
+  createdAt        DateTime     @default(now()) @db.Timestamptz
+
+  @@index([productId])
+  @@index([employeeId])
+  @@index([createdAt])
+  @@index([referenceNo])
+}
+
+model InventoryAdjustment {
+  id               String           @id @default(uuid()) @db.Uuid
+  productId        String           @db.Uuid
+  systemQuantity   Int
+  physicalQuantity Int
+  difference       Int
+  reason           String
+  notes            String?
+  requestedById    String           @db.Uuid
+  approvedById     String?          @db.Uuid
+  approvalStatus   AdjustmentStatus @default(PENDING)
+  product          Product          @relation(fields: [productId], references: [id])
+  requestedBy      User             @relation("RequestedBy", fields: [requestedById], references: [id])
+  approvedBy       User?            @relation("ApprovedBy", fields: [approvedById], references: [id])
+  createdAt        DateTime         @default(now()) @db.Timestamptz
+  updatedAt        DateTime         @updatedAt @db.Timestamptz
+}
+
+model Sale {
+  id                  String        @id @default(uuid()) @db.Uuid
+  receiptNo           String        @unique
+  customerId          String?       @db.Uuid
+  cashierId           String        @db.Uuid
+  subtotal            Decimal       @db.Decimal(12, 2)
+  discountTotal       Decimal       @default(0) @db.Decimal(12, 2)
+  tax                 Decimal       @default(0) @db.Decimal(12, 2)
+  total               Decimal       @db.Decimal(12, 2)
+  amountPaid          Decimal       @db.Decimal(12, 2)
+  change              Decimal       @db.Decimal(12, 2)
+  paymentMethod       PaymentMethod
+  status              SaleStatus    @default(COMPLETED)
+  idempotencyKey      String?       @unique
+  grossProfit         Decimal       @default(0) @db.Decimal(12, 2)
+  customer            Customer?     @relation(fields: [customerId], references: [id])
+  cashier             User          @relation("CashierSales", fields: [cashierId], references: [id])
+  items               SaleItem[]
+  payments            Payment[]
+  refunds             Refund[]
+  createdAt           DateTime      @default(now()) @db.Timestamptz
+  updatedAt           DateTime      @updatedAt @db.Timestamptz
+
+  @@index([receiptNo])
+  @@index([customerId])
+  @@index([cashierId])
+  @@index([createdAt])
+}
+
+model SaleItem {
+  id              String  @id @default(uuid()) @db.Uuid
+  saleId          String  @db.Uuid
+  productId       String  @db.Uuid
+  quantity        Int
+  sellingPrice    Decimal @db.Decimal(12, 2)
+  historicalCost  Decimal @db.Decimal(12, 2)
+  productDiscount Decimal @default(0) @db.Decimal(12, 2)
+  lineTotal       Decimal @db.Decimal(12, 2)
+  profit          Decimal @db.Decimal(12, 2)
+  sale            Sale    @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  product         Product @relation(fields: [productId], references: [id])
+}
+
+model HeldSale {
+  id          String         @id @default(uuid()) @db.Uuid
+  customerId  String?        @db.Uuid
+  cashierId   String         @db.Uuid
+  notes       String?
+  items       HeldSaleItem[]
+  createdAt   DateTime       @default(now()) @db.Timestamptz
+  updatedAt   DateTime       @updatedAt @db.Timestamptz
+}
+
+model HeldSaleItem {
+  id        String   @id @default(uuid()) @db.Uuid
+  heldSaleId String  @db.Uuid
+  productId String   @db.Uuid
+  quantity  Int
+  discount  Decimal  @default(0) @db.Decimal(12, 2)
+  heldSale  HeldSale @relation(fields: [heldSaleId], references: [id], onDelete: Cascade)
+  product   Product  @relation(fields: [productId], references: [id])
+}
+
+model Payment {
+  id              String        @id @default(uuid()) @db.Uuid
+  saleId          String        @db.Uuid
+  method          PaymentMethod
+  referenceNumber String?
+  amount          Decimal       @db.Decimal(12, 2)
+  processedById   String        @db.Uuid
+  sale            Sale          @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  createdAt       DateTime      @default(now()) @db.Timestamptz
+
+  @@index([saleId])
+}
+
+model Refund {
+  id             String        @id @default(uuid()) @db.Uuid
+  saleId         String        @db.Uuid
+  reason         String
+  refundAmount   Decimal       @db.Decimal(12, 2)
+  refundMethod   PaymentMethod
+  approvedById   String?       @db.Uuid
+  processedById  String        @db.Uuid
+  sale           Sale          @relation(fields: [saleId], references: [id])
+  items          RefundItem[]
+  createdAt      DateTime      @default(now()) @db.Timestamptz
+}
+
+model RefundItem {
+  id          String @id @default(uuid()) @db.Uuid
+  refundId    String @db.Uuid
+  productId   String @db.Uuid
+  quantity    Int
+  condition   String
+  amount      Decimal @db.Decimal(12, 2)
+  refund      Refund  @relation(fields: [refundId], references: [id], onDelete: Cascade)
+  product     Product @relation(fields: [productId], references: [id])
+}
+
+model Notification {
+  id              String               @id @default(uuid()) @db.Uuid
+  title           String
+  message         String
+  alertType       String
+  priority        NotificationPriority @default(NORMAL)
+  recipientRole   RoleName?
+  relatedProductId String?             @db.Uuid
+  isRead          Boolean              @default(false)
+  product         Product?             @relation(fields: [relatedProductId], references: [id])
+  createdAt       DateTime             @default(now()) @db.Timestamptz
+
+  @@index([recipientRole, isRead])
+}
+
+model AuditLog {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String?  @db.Uuid
+  action    String
+  module    String
+  recordId  String?
+  oldData   Json?
+  newData   Json?
+  ipAddress String?
+  userAgent String?
+  user      User?    @relation(fields: [userId], references: [id])
+  createdAt DateTime @default(now()) @db.Timestamptz
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @db.Uuid
+  tokenHash String   @unique
+  expiresAt DateTime @db.Timestamptz
+  revokedAt DateTime? @db.Timestamptz
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now()) @db.Timestamptz
+
+  @@index([tokenHash])
+}
+
+model PasswordResetToken {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @db.Uuid
+  tokenHash String   @unique
+  expiresAt DateTime @db.Timestamptz
+  usedAt    DateTime? @db.Timestamptz
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now()) @db.Timestamptz
+}
+
+model SystemSetting {
+  id        String   @id @default(uuid()) @db.Uuid
+  key       String   @unique
+  value     Json
+  createdAt DateTime @default(now()) @db.Timestamptz
+  updatedAt DateTime @updatedAt @db.Timestamptz
+}
