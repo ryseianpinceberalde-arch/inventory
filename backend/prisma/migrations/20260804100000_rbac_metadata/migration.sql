@@ -2,9 +2,9 @@
 ALTER TABLE "Role" ALTER COLUMN "name" TYPE TEXT USING "name"::TEXT;
 
 -- Mark default roles as system-managed and add permission display metadata.
-ALTER TABLE "Role" ADD COLUMN "isSystem" BOOLEAN NOT NULL DEFAULT false;
-ALTER TABLE "Permission" ADD COLUMN "name" TEXT NOT NULL DEFAULT '';
-ALTER TABLE "Permission" ADD COLUMN "module" TEXT NOT NULL DEFAULT '';
+ALTER TABLE "Role" ADD COLUMN IF NOT EXISTS "isSystem" BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE "Permission" ADD COLUMN IF NOT EXISTS "name" TEXT NOT NULL DEFAULT '';
+ALTER TABLE "Permission" ADD COLUMN IF NOT EXISTS "module" TEXT NOT NULL DEFAULT '';
 
 UPDATE "Permission"
 SET
@@ -14,4 +14,4 @@ WHERE "name" = '' OR "module" = '';
 
 UPDATE "Role" SET "isSystem" = true WHERE "name" IN ('ADMIN', 'MANAGER', 'CASHIER', 'INVENTORY_STAFF');
 
-CREATE INDEX "Permission_module_idx" ON "Permission"("module");
+CREATE INDEX IF NOT EXISTS "Permission_module_idx" ON "Permission"("module");
