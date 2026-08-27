@@ -48,7 +48,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
         </div>
         <nav className="space-y-1 p-3">
           {nav.filter((item) => hasAnyPermission(item.anyPermissions)).map((item) => (
-            <NavLink key={item.to} to={item.to} className={({ isActive }) => `flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium ${isActive ? "bg-teal-50 text-brand dark:bg-teal-950" : "text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"}`}>
+            <NavLink key={item.to} to={item.to} className={({ isActive }) => `flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-all duration-200 ease-out hover:translate-x-1 hover:scale-[1.02] hover:shadow-sm ${isActive ? "bg-teal-50 text-brand dark:bg-teal-950" : "text-slate-600 hover:bg-teal-50 hover:text-brand dark:text-slate-300 dark:hover:bg-teal-950 dark:hover:text-teal-100"}`}>
               <item.icon size={18} />
               {item.label}
             </NavLink>

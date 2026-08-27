@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AxiosError } from "axios";
 import jsPDF from "jspdf";
-import { Archive, Barcode, Camera, Download, FileText, Hash, Plus, Printer, RotateCcw, Search, X } from "lucide-react";
+import { Archive, Barcode, Camera, Download, FileText, Hash, Pencil, Plus, Printer, RotateCcw, Search, X } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import toast from "react-hot-toast";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
@@ -103,6 +103,8 @@ export function ResourcePage({ title, endpoint, columns, showCreate = true }: Re
   const [selectedBarcodeProduct, setSelectedBarcodeProduct] = useState<Row | null>(null);
   const [labelQuantity, setLabelQuantity] = useState("1");
   const [productForm, setProductForm] = useState<ProductFormState>(emptyProductForm);
+  const [editingProductId, setEditingProductId] = useState<string | null>(null);
+  const [editingOriginalBarcode, setEditingOriginalBarcode] = useState("");
   const [importedSource, setImportedSource] = useState("");
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
@@ -164,6 +166,40 @@ export function ResourcePage({ title, endpoint, columns, showCreate = true }: Re
     },
     onError: (error: AxiosError<{ message?: string }>) => toast.error(error.response?.data?.message ?? "Product create failed")
   });
+  const updateProduct = useMutation({
+    mutationFn: async ({ id, payload }: { id: string; payload: ProductFormState }) => api.put(`/products/${id}`, {
+      name: payload.name.trim(),
+      sku: payload.sku.trim(),
+      barcode: payload.barcode.trim(),
+      categoryId: payload.categoryId,
+      primarySupplierId: payload.primarySupplierId || null,
+      description: payload.description.trim() || undefined,
+      imageUrl: payload.imageUrl.trim() || undefined,
+      costPrice: payload.costPrice,
+      sellingPrice: payload.sellingPrice,
+      currentStock: Number(payload.currentStock),
+      reorderLevel: Number(payload.reorderLevel),
+      unit: payload.unit.trim() || "pcs",
+      tracksExpiration: payload.tracksExpiration,
+      status: "ACTIVE"
+    }),
+    onSuccess: () => {
+      toast.success("Product updated");
+      setProductForm(emptyProductForm);
+      setEditingProductId(null);
+      setEditingOriginalBarcode("");
+      setImportedSource("");
+      setShowProductForm(false);
+      setShowBarcodeCamera(false);
+      void queryClient.invalidateQueries({
+        predicate: (query) => {
+          const key = query.queryKey[0];
+          return typeof key === "string" && ["/products", "/supplier-products", "/inventory"].some((prefix) => key.startsWith(prefix));
+        }
+      });
+    },
+    onError: (error: AxiosError<{ message?: string }>) => toast.error(error.response?.data?.message ?? "Product update failed")
+  });
   const productStatusAction = useMutation({
     mutationFn: async ({ id, action }: { id: string; action: "archive" | "restore" }) => api.post(`/products/${id}/${action}`),
     onSuccess: (_response, variables) => {
@@ -200,8 +236,43 @@ export function ResourcePage({ title, endpoint, columns, showCreate = true }: Re
   }, [activeProductList, searchParams]);
 
   function openProductForm() {
+    setEditingProductId(null);
+    setEditingOriginalBarcode("");
     setProductForm((current) => ({ ...current, sku: current.sku || generateSkuFromBarcode(current.barcode) }));
     setShowProductForm(true);
+  }
+
+  function productFormFromRow(row: Row): ProductFormState {
+    const category = row.category && typeof row.category === "object" ? row.category as Row : null;
+    const primarySupplier = row.primarySupplier && typeof row.primarySupplier === "object" ? row.primarySupplier as Row : null;
+    return {
+      name: text(row.name),
+      sku: text(row.sku),
+      barcode: text(row.barcode),
+      categoryId: text(row.categoryId) || text(category?.id),
+      primarySupplierId: text(row.primarySupplierId) || text(primarySupplier?.id),
+      description: text(row.description),
+      costPrice: text(row.costPrice),
+      sellingPrice: text(row.sellingPrice),
+      currentStock: text(row.currentStock) || "0",
+      reorderLevel: text(row.reorderLevel) || "0",
+      unit: text(row.unit) || "pcs",
+      imageUrl: text(row.imageUrl),
+      tracksExpiration: Boolean(row.tracksExpiration)
+    };
+  }
+
+  function openEditProductForm(row: Row) {
+    const rowId = typeof row.id === "string" ? row.id : "";
+    if (!rowId) return;
+    const nextForm = productFormFromRow(row);
+    setEditingProductId(rowId);
+    setEditingOriginalBarcode(nextForm.barcode);
+    setProductForm(nextForm);
+    setImportedSource("");
+    setShowBarcodeCamera(false);
+    setShowProductForm(true);
+    window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
   function updateProductForm<K extends keyof ProductFormState>(key: K, value: ProductFormState[K]) {
@@ -220,16 +291,22 @@ export function ResourcePage({ title, endpoint, columns, showCreate = true }: Re
       toast.error("Category is required");
       return;
     }
-    try {
-      await getData(`/barcodes/${encodeURIComponent(productForm.barcode.trim())}`);
-      toast.error("Barcode already belongs to another product");
-      return;
-    } catch (error) {
-      const status = error instanceof AxiosError ? error.response?.status : undefined;
-      if (status && status !== 404) {
-        toast.error("Could not validate barcode");
+    if (!editingProductId || productForm.barcode.trim() !== editingOriginalBarcode) {
+      try {
+        await getData(`/barcodes/${encodeURIComponent(productForm.barcode.trim())}`);
+        toast.error("Barcode already belongs to another product");
         return;
+      } catch (error) {
+        const status = error instanceof AxiosError ? error.response?.status : undefined;
+        if (status && status !== 404) {
+          toast.error("Could not validate barcode");
+          return;
+        }
       }
+    }
+    if (editingProductId) {
+      updateProduct.mutate({ id: editingProductId, payload: { ...productForm, sku: productForm.sku.trim() || generateSkuFromBarcode(productForm.barcode) } });
+      return;
     }
     createProduct.mutate({ ...productForm, sku: productForm.sku.trim() || generateSkuFromBarcode(productForm.barcode) });
   }
@@ -237,6 +314,9 @@ export function ResourcePage({ title, endpoint, columns, showCreate = true }: Re
   function closeProductForm() {
     setShowProductForm(false);
     setShowBarcodeCamera(false);
+    setEditingProductId(null);
+    setEditingOriginalBarcode("");
+    setProductForm(emptyProductForm);
     setImportedSource("");
     if (!searchParams.has("barcode")) return;
 
@@ -330,7 +410,7 @@ export function ResourcePage({ title, endpoint, columns, showCreate = true }: Re
         <Card>
           <form className="space-y-4" onSubmit={submitProduct}>
             <div className="flex items-center justify-between gap-3">
-              <h2 className="font-semibold">Add product</h2>
+              <h2 className="font-semibold">{editingProductId ? "Edit product" : "Add product"}</h2>
               <button type="button" className="rounded-md border border-line p-2 dark:border-slate-700" onClick={closeProductForm} aria-label="Close product form"><X size={18} /></button>
             </div>
             {importedSource && (
@@ -392,7 +472,7 @@ export function ResourcePage({ title, endpoint, columns, showCreate = true }: Re
             </div>
             <div className="flex justify-end gap-2">
               <Button type="button" className="bg-slate-700 hover:bg-slate-800" onClick={closeProductForm}>Cancel</Button>
-              <Button type="submit" disabled={createProduct.isPending}>{createProduct.isPending ? "Saving..." : "Save product"}</Button>
+              <Button type="submit" disabled={createProduct.isPending || updateProduct.isPending}>{createProduct.isPending || updateProduct.isPending ? "Saving..." : editingProductId ? "Update product" : "Save product"}</Button>
             </div>
           </form>
         </Card>
@@ -413,6 +493,7 @@ export function ResourcePage({ title, endpoint, columns, showCreate = true }: Re
                     {columns.map((column) => <td className="py-3 pr-4" key={column}>{text(row[column])}</td>)}
                     {(showProductArchiveActions || showBarcodeActions) && (
                       <td className="space-y-2 py-3 pr-4">
+                        {activeProductList && <Can permission="products.update"><Button className="h-8 bg-brand px-3 text-xs" disabled={!rowId} onClick={() => openEditProductForm(row)}><Pencil size={14} /> Edit</Button></Can>}
                         {showBarcodeActions && <Button className="h-8 bg-slate-700 px-3 text-xs hover:bg-slate-800" disabled={!text(row.barcode)} onClick={() => setSelectedBarcodeProduct(row)}><Barcode size={14} /> Barcode</Button>}
                         {rowArchived ? (
                           <Can permission="products.restore"><Button className="h-8 bg-teal-700 px-3 text-xs" disabled={!rowId || productStatusAction.isPending} onClick={() => productStatusAction.mutate({ id: rowId, action: "restore" })}><RotateCcw size={14} /> Restore</Button></Can>

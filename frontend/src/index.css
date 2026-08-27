@@ -12,6 +12,72 @@
   color-scheme: dark;
 }
 
+@layer base {
+  button:not(:disabled) {
+    cursor: pointer;
+    transition-duration: 200ms;
+    transition-property: background-color, border-color, color, box-shadow, transform, opacity;
+    transition-timing-function: ease-out;
+  }
+
+  button:not(:disabled):hover {
+    background-color: #f0fdfa;
+    box-shadow: 0 6px 16px rgba(15, 23, 42, 0.12);
+    filter: brightness(0.98);
+    transform: scale(1.03);
+  }
+
+  .dark button:not(:disabled):hover {
+    background-color: #134e4a;
+  }
+
+  button:not(:disabled):active {
+    transform: scale(0.97);
+  }
+
+  button:focus-visible {
+    outline: 2px solid #0f766e;
+    outline-offset: 2px;
+  }
+}
+
+@layer components {
+  .dashboard-grid {
+    overflow: visible;
+  }
+
+  .dashboard-card-clickable {
+    height: 100%;
+  }
+
+  .dashboard-card-zoom {
+    transition-duration: 250ms;
+    transition-property: box-shadow, transform;
+    transition-timing-function: ease-out;
+    will-change: transform;
+  }
+
+  .dashboard-card-zoom:hover {
+    box-shadow: 0 12px 28px rgba(15, 23, 42, 0.16);
+    transform: translateY(-3px) scale(1.03);
+  }
+
+  .dashboard-card-zoom:active {
+    transform: scale(0.98);
+  }
+
+  .dashboard-card-link {
+    display: block;
+    height: 100%;
+    border-radius: 0.5rem;
+  }
+
+  .dashboard-card-link:focus-visible {
+    outline: 2px solid #0f766e;
+    outline-offset: 3px;
+  }
+}
+
 @media print {
   body * {
     visibility: hidden;
