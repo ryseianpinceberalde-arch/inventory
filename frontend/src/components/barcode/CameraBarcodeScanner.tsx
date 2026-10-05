@@ -10,6 +10,7 @@ const barcodeFormats = [
   Html5QrcodeSupportedFormats.UPC_E,
   Html5QrcodeSupportedFormats.CODE_128
 ];
+const rearmAfterMissingMs = 800;
 
 interface CameraBarcodeScannerProps {
   onClose: () => void;
@@ -23,13 +24,18 @@ export function CameraBarcodeScanner({ onClose, onScan, continuous = false, comp
   const readerId = `barcode-camera-${generatedId}`;
   const scannerRef = useRef<Html5Qrcode | null>(null);
   const hasScannedRef = useRef(false);
+  const onScanRef = useRef(onScan);
   const lastBarcodeRef = useRef("");
-  const lastBarcodeAtRef = useRef(0);
+  const missingSinceRef = useRef<number | null>(null);
   const [cameras, setCameras] = useState<CameraDevice[]>([]);
   const [cameraId, setCameraId] = useState("");
   const [status, setStatus] = useState("Preparing camera...");
   const [error, setError] = useState("");
   const [detectedBarcode, setDetectedBarcode] = useState("");
+
+  useEffect(() => {
+    onScanRef.current = onScan;
+  }, [onScan]);
 
   const stopScanner = useCallback(async () => {
     const scanner = scannerRef.current;
@@ -82,6 +88,8 @@ export function CameraBarcodeScanner({ onClose, onScan, continuous = false, comp
     async function startScanner() {
       await stopScanner();
       hasScannedRef.current = false;
+      lastBarcodeRef.current = "";
+      missingSinceRef.current = null;
       setDetectedBarcode("");
       setError("");
       setStatus("Starting camera...");
@@ -108,20 +116,27 @@ export function CameraBarcodeScanner({ onClose, onScan, continuous = false, comp
           (decodedText) => {
             const scannedBarcode = decodedText.trim();
             if (!scannedBarcode) return;
-            const now = Date.now();
             if (continuous) {
-              if (lastBarcodeRef.current === scannedBarcode && now - lastBarcodeAtRef.current < 2500) return;
+              missingSinceRef.current = null;
+              if (lastBarcodeRef.current === scannedBarcode) return;
               lastBarcodeRef.current = scannedBarcode;
-              lastBarcodeAtRef.current = now;
             } else {
               if (hasScannedRef.current) return;
               hasScannedRef.current = true;
             }
             setDetectedBarcode(scannedBarcode);
-            setStatus(continuous ? "Barcode detected. Ready for next scan." : "Barcode detected");
-            onScan(scannedBarcode);
+            setStatus(continuous ? "Barcode detected. Remove it from view to scan it again." : "Barcode detected");
+            onScanRef.current(scannedBarcode);
           },
-          undefined
+          () => {
+            if (!continuous || !lastBarcodeRef.current) return;
+            const now = Date.now();
+            missingSinceRef.current ??= now;
+            if (now - missingSinceRef.current >= rearmAfterMissingMs) {
+              lastBarcodeRef.current = "";
+              missingSinceRef.current = null;
+            }
+          }
         );
 
         if (!cancelled) setStatus("Camera ready. Point it at the barcode.");
@@ -138,7 +153,7 @@ export function CameraBarcodeScanner({ onClose, onScan, continuous = false, comp
       cancelled = true;
       void stopScanner();
     };
-  }, [cameraId, compact, continuous, onScan, readerId, stopScanner]);
+  }, [cameraId, compact, continuous, readerId, stopScanner]);
 
   return (
     <div className={compact ? "space-y-2" : "space-y-3"}>

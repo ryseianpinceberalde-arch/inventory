@@ -50,6 +50,7 @@ interface PendingPayMongoCheckout {
 
 const posCartStorageKey = "smartstock.pos.cart";
 const pendingPayMongoStorageKey = "smartstock.pos.paymongo.pending";
+const duplicateScanWindowMs = 700;
 
 export function POS() {
   const queryClient = useQueryClient();
@@ -76,6 +77,7 @@ export function POS() {
   const scannerBufferRef = useRef("");
   const lastScannerKeyAtRef = useRef(0);
   const activeLookupRef = useRef("");
+  const recentBarcodeScanRef = useRef<{ barcode: string; at: number } | null>(null);
   const processingPayMongoReturnRef = useRef(false);
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -199,6 +201,10 @@ export function POS() {
     const trimmedBarcode = barcodeValue.trim().replace(/[^A-Za-z0-9._-]/g, "");
     if (!trimmedBarcode) return;
     if (activeLookupRef.current === trimmedBarcode) return;
+    const now = Date.now();
+    const recentScan = recentBarcodeScanRef.current;
+    if (recentScan?.barcode === trimmedBarcode && now - recentScan.at < duplicateScanWindowMs) return;
+    recentBarcodeScanRef.current = { barcode: trimmedBarcode, at: now };
     activeLookupRef.current = trimmedBarcode;
 
     try {
