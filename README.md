@@ -40,6 +40,14 @@ npm run dev
 
 The frontend runs at `http://localhost:5173` and the backend at `http://localhost:5000`.
 
+## PayMongo GCash Payments
+
+The POS creates GCash checkout sessions through the backend. To enable test payments, set `PAYMONGO_SECRET_KEY` in `backend/.env` to your PayMongo **test secret key** (`sk_test_...`), then restart the backend. The optional `PAYMONGO_PUBLIC_KEY` (`pk_test_...`) is not used by the current hosted-checkout flow.
+
+For a hosted deployment, configure `PAYMONGO_SECRET_KEY` in the backend service's environment or secret settings. Do not commit secret keys to GitHub or put them in frontend environment variables. The repository's `.env` files are ignored by Git; `backend/.env.example` contains placeholders only.
+
+If a secret key has been shared or exposed, regenerate it in the PayMongo Dashboard before using it. Use test keys during development, and only use live keys in a production deployment.
+
 ## Prisma
 
 ```bash
