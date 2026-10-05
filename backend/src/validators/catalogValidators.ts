@@ -36,6 +36,11 @@ export const supplierSchema = z.object({
   notes: z.string().optional()
 });
 
+export const supplierProductSchema = z.object({
+  supplierId: z.string().uuid(),
+  productId: z.string().uuid()
+});
+
 export const customerSchema = z.object({
   fullName: z.string().min(2),
   phone: z.string().optional(),
@@ -44,7 +49,7 @@ export const customerSchema = z.object({
   customerType: z.enum(["Walk-in", "Regular", "Member", "Wholesale"]).default("Walk-in"),
   loyaltyPoints: z.coerce.number().int().min(0).default(0),
   creditBalance: money.default("0"),
-  birthday: z.string().optional().nullable(),
+  birthday: z.string().date().transform((value) => new Date(`${value}T00:00:00Z`).toISOString()).optional().nullable(),
   notes: z.string().optional(),
   status: z.enum(["ACTIVE", "ARCHIVED"]).default("ACTIVE")
 });

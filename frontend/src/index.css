@@ -20,22 +20,7 @@
     transition-timing-function: ease-out;
   }
 
-  button:not(:disabled):hover {
-    background-color: #f0fdfa;
-    box-shadow: 0 6px 16px rgba(15, 23, 42, 0.12);
-    filter: brightness(0.98);
-    transform: scale(1.03);
-  }
-
-  .dark button:not(:disabled):hover {
-    background-color: #134e4a;
-  }
-
-  button:not(:disabled):active {
-    transform: scale(0.97);
-  }
-
-  button:focus-visible {
+  :is(button, a, input, select, textarea):focus-visible {
     outline: 2px solid #0f766e;
     outline-offset: 2px;
   }
@@ -59,11 +44,11 @@
 
   .dashboard-card-zoom:hover {
     box-shadow: 0 12px 28px rgba(15, 23, 42, 0.16);
-    transform: translateY(-3px) scale(1.03);
+    transform: translateY(-2px);
   }
 
   .dashboard-card-zoom:active {
-    transform: scale(0.98);
+    transform: translateY(0);
   }
 
   .dashboard-card-link {
@@ -105,4 +90,22 @@
     box-shadow: none;
     break-inside: avoid;
   }
+}
+
+@layer base {
+  body { margin: 0; min-width: 320px; }
+  h1 { letter-spacing: -0.025em; }
+  select, textarea { color: inherit; background-color: white; }
+  .dark select, .dark textarea { background-color: #020617; }
+  th { white-space: nowrap; font-weight: 600; }
+  thead { background-color: #f8fafc; }
+  .dark thead { background-color: #0f172a; }
+  tbody tr { transition: background-color 150ms; }
+  tbody tr:hover { background-color: #f0fdfa; }
+  .dark tbody tr:hover { background-color: #134e4a; }
+  th, td { padding-left: .75rem; padding-right: .75rem; }
+  input[type="checkbox"] { accent-color: #0f766e; width: 1rem; height: 1rem; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
 }

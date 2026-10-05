@@ -19,7 +19,7 @@ export function setRefreshCookie(res: Response, token: string) {
 }
 
 export function clearRefreshCookie(res: Response) {
-  res.clearCookie(cookieName);
+  res.clearCookie(cookieName, { httpOnly: true, secure: process.env.NODE_ENV === "production", sameSite: process.env.NODE_ENV === "production" ? "none" : "lax" });
 }
 
 export async function login(email: string, password: string) {
@@ -57,7 +57,7 @@ export async function refresh(rawToken?: string) {
     roleName: stored.user.role.name,
     email: stored.user.email,
     fullName: stored.user.fullName,
-    permissions: stored.user.role.rolePermissions.map((row) => row.permission.key)
+    permissions: Array.from(new Set([...stored.user.role.rolePermissions.map((row) => row.permission.key), ...stored.user.permissions.map((row) => row.permission.key)]))
   };
   return { accessToken: signAccessToken(publicUser), user: publicUser };
 }
@@ -72,7 +72,10 @@ export async function changePassword(userId: string, currentPassword: string, ne
   const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
   const valid = await bcrypt.compare(currentPassword, user.passwordHash);
   if (!valid) throw new AppError("Current password is incorrect", 400);
-  await prisma.user.update({ where: { id: userId }, data: { passwordHash: await bcrypt.hash(newPassword, 12) } });
+  await prisma.$transaction([
+    prisma.user.update({ where: { id: userId }, data: { passwordHash: await bcrypt.hash(newPassword, 12) } }),
+    prisma.refreshToken.updateMany({ where: { userId, revokedAt: null }, data: { revokedAt: new Date() } })
+  ]);
 }
 
 export async function createPasswordReset(email: string) {
@@ -97,7 +100,8 @@ export async function resetPassword(token: string, newPassword: string) {
     if (await bcrypt.compare(token, row.tokenHash)) {
       await prisma.$transaction([
         prisma.user.update({ where: { id: row.userId }, data: { passwordHash: await bcrypt.hash(newPassword, 12) } }),
-        prisma.passwordResetToken.update({ where: { id: row.id }, data: { usedAt: new Date() } })
+        prisma.passwordResetToken.update({ where: { id: row.id, usedAt: null }, data: { usedAt: new Date() } }),
+        prisma.refreshToken.updateMany({ where: { userId: row.userId, revokedAt: null }, data: { revokedAt: new Date() } })
       ]);
       return;
     }

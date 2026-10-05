@@ -1,35 +1,66 @@
-import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { FormEvent, ReactNode, useState } from "react";
 import toast from "react-hot-toast";
 import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";
 import { Input } from "../components/ui/Input";
-import { api, getData } from "../services/api";
+import { QueryState } from "../components/ui/QueryState";
+import { api, errorMessage, getAllProducts, getData } from "../services/api";
+import { useAuth } from "../contexts/AuthContext";
 import type { Product } from "../types/api";
 
+const selectClass = "mt-1 h-11 w-full rounded-lg border border-line px-3 text-sm dark:border-slate-700";
+
 export function StockIn() {
-  const { data: products = [] } = useQuery({ queryKey: ["products-stock-in"], queryFn: () => getData<Product[]>("/products?limit=100") });
-  const [productId, setProductId] = useState("");
   const [supplierId, setSupplierId] = useState("");
   const [quantity, setQuantity] = useState("1");
-  const [unitCost, setUnitCost] = useState("0");
-  return <ActionCard title="Stock-in" onSubmit={async () => { await api.post("/stock-in", { referenceNo: `SIN-${Date.now()}`, supplierId, deliveryDate: new Date().toISOString(), items: [{ productId, quantity: Number(quantity), unitCost }] }); toast.success("Stock-in completed"); }} products={products} productId={productId} setProductId={setProductId}><Input value={supplierId} onChange={(event) => setSupplierId(event.target.value)} placeholder="Supplier UUID" /><Input value={quantity} onChange={(event) => setQuantity(event.target.value)} placeholder="Quantity" /><Input value={unitCost} onChange={(event) => setUnitCost(event.target.value)} placeholder="Unit cost" /></ActionCard>;
+  const [unitCost, setUnitCost] = useState("");
+  const suppliers = useQuery({ queryKey: ["/suppliers"], queryFn: () => getData<Array<{ id: string; name: string; status: string }>>("/suppliers") });
+  return <ActionCard title="Stock-in" onSubmit={async (productId) => { await api.post("/stock-in", { referenceNo: `SIN-${crypto.randomUUID()}`, supplierId, deliveryDate: new Date().toISOString(), items: [{ productId, quantity: Number(quantity), unitCost }] }); }}>
+    {suppliers.isError && <QueryState error onRetry={() => void suppliers.refetch()} />}
+    <label className="block text-sm font-medium">Supplier<select required disabled={suppliers.isLoading} className={selectClass} value={supplierId} onChange={(event) => setSupplierId(event.target.value)}><option value="">Select supplier</option>{suppliers.data?.filter((row) => row.status === "ACTIVE").map((row) => <option key={row.id} value={row.id}>{row.name}</option>)}</select></label>
+    <label className="block text-sm font-medium">Quantity<Input required className="mt-1" type="number" min="1" step="1" value={quantity} onChange={(event) => setQuantity(event.target.value)} /></label>
+    <label className="block text-sm font-medium">Unit cost (PHP)<Input required className="mt-1" type="number" min="0" step="0.01" value={unitCost} onChange={(event) => setUnitCost(event.target.value)} /></label>
+  </ActionCard>;
 }
 
 export function StockOut() {
-  const { data: products = [] } = useQuery({ queryKey: ["products-stock-out"], queryFn: () => getData<Product[]>("/products?limit=100") });
-  const [productId, setProductId] = useState("");
   const [quantity, setQuantity] = useState("1");
-  return <ActionCard title="Stock-out" onSubmit={async () => { await api.post("/stock-out", { referenceNo: `SOUT-${Date.now()}`, productId, quantity: Number(quantity), reason: "Manual correction" }); toast.success("Stock-out completed"); }} products={products} productId={productId} setProductId={setProductId}><Input value={quantity} onChange={(event) => setQuantity(event.target.value)} placeholder="Quantity" /></ActionCard>;
+  const [reason, setReason] = useState("Manual correction");
+  return <ActionCard title="Stock-out" confirm="Remove this quantity from stock?" onSubmit={async (productId) => { await api.post("/stock-out", { referenceNo: `SOUT-${crypto.randomUUID()}`, productId, quantity: Number(quantity), reason }); }}>
+    <label className="block text-sm font-medium">Quantity<Input required className="mt-1" type="number" min="1" step="1" value={quantity} onChange={(event) => setQuantity(event.target.value)} /></label>
+    <label className="block text-sm font-medium">Reason<select className={selectClass} value={reason} onChange={(event) => setReason(event.target.value)}>{["Damaged", "Expired", "Returned to supplier", "Lost", "Internal use", "Product transfer", "Manual correction"].map((item) => <option key={item}>{item}</option>)}</select></label>
+  </ActionCard>;
 }
 
 export function InventoryAdjustment() {
-  const { data: products = [] } = useQuery({ queryKey: ["products-adjust"], queryFn: () => getData<Product[]>("/products?limit=100") });
-  const [productId, setProductId] = useState("");
+  const { hasPermission, user } = useAuth();
+  const queryClient = useQueryClient();
   const [physicalQuantity, setPhysicalQuantity] = useState("0");
-  return <ActionCard title="Inventory adjustment" onSubmit={async () => { await api.post("/inventory-adjustments", { productId, physicalQuantity: Number(physicalQuantity), reason: "Physical inventory correction" }); toast.success("Adjustment recorded"); }} products={products} productId={productId} setProductId={setProductId}><Input value={physicalQuantity} onChange={(event) => setPhysicalQuantity(event.target.value)} placeholder="Physical quantity" /></ActionCard>;
+  const [reason, setReason] = useState("");
+  const adjustments = useQuery({ queryKey: ["adjustments"], queryFn: () => getData<Array<{ id: string; product: Product; physicalQuantity: number; approvalStatus: string; requestedById: string }>>("/inventory-adjustments"), enabled: hasPermission("inventory.view") });
+  const approve = useMutation({ mutationFn: (id: string) => api.post(`/inventory-adjustments/${id}/approve`), onSuccess: async () => { toast.success("Adjustment approved"); await queryClient.invalidateQueries(); }, onError: (error) => toast.error(errorMessage(error)) });
+  return <div className="space-y-6"><ActionCard title="Inventory adjustment" onSubmit={async (productId) => { await api.post("/inventory-adjustments", { productId, physicalQuantity: Number(physicalQuantity), reason }); }}>
+    <p className="text-sm text-slate-500">Changes of 10 units or more require approval from another authorized employee.</p>
+    <label className="block text-sm font-medium">Physical count<Input required className="mt-1" type="number" min="0" step="1" value={physicalQuantity} onChange={(event) => setPhysicalQuantity(event.target.value)} /></label>
+    <label className="block text-sm font-medium">Reason<Input required minLength={3} className="mt-1" value={reason} onChange={(event) => setReason(event.target.value)} /></label>
+  </ActionCard>{adjustments.isError && <QueryState error onRetry={() => void adjustments.refetch()} />}
+    {adjustments.data && <Card><h2 className="mb-4 font-semibold">Adjustment history</h2>{adjustments.data.length === 0 && <p className="text-sm text-slate-500">No adjustments recorded.</p>}{adjustments.data.map((row) => <div className="flex flex-wrap items-center justify-between gap-3 border-t border-line py-3 text-sm" key={row.id}><div><strong>{row.product.name}</strong><p className="text-slate-500">Physical count: {row.physicalQuantity} ? {row.approvalStatus}</p></div>{row.approvalStatus === "PENDING" && row.requestedById !== user?.id && hasPermission("inventory.adjustment_approve") && <Button busy={approve.isPending} onClick={() => { if (window.confirm("Approve this physical count and update stock?")) approve.mutate(row.id); }}>Approve</Button>}</div>)}</Card>}
+  </div>;
 }
 
-function ActionCard(props: { title: string; products: Product[]; productId: string; setProductId: (id: string) => void; onSubmit: () => Promise<void>; children: React.ReactNode }) {
-  return <Card className="mx-auto max-w-xl"><h1 className="text-xl font-bold">{props.title}</h1><select className="mt-4 h-10 w-full rounded-md border border-line px-3 text-sm" value={props.productId} onChange={(event) => props.setProductId(event.target.value)}><option value="">Select product</option>{props.products.map((product) => <option key={product.id} value={product.id}>{product.name}</option>)}</select><div className="mt-3 space-y-3">{props.children}</div><Button className="mt-4" onClick={() => void props.onSubmit()}>Submit</Button></Card>;
+function ActionCard({ title, confirm, children, onSubmit }: { title: string; confirm?: string; children: ReactNode; onSubmit: (id: string) => Promise<void> }) {
+  const queryClient = useQueryClient();
+  const products = useQuery({ queryKey: ["inventory-products"], queryFn: () => getAllProducts<Product>() });
+  const [productId, setProductId] = useState("");
+  const [error, setError] = useState("");
+  const mutation = useMutation({ mutationFn: () => onSubmit(productId), onSuccess: async () => { toast.success(`${title} recorded successfully`); setProductId(""); setError(""); await queryClient.invalidateQueries(); }, onError: (error) => setError(errorMessage(error)) });
+  function submit(event: FormEvent) { event.preventDefault(); if (mutation.isPending || (confirm && !window.confirm(confirm))) return; setError(""); mutation.mutate(); }
+  return <Card className="mx-auto max-w-2xl"><h1 className="text-2xl font-bold">{title}</h1><p className="mt-1 text-sm text-slate-500">Record an inventory change and keep the stock history up to date.</p>
+    {products.isError && <QueryState error onRetry={() => void products.refetch()} />}
+    <form className="mt-6 space-y-4" onSubmit={submit}><fieldset disabled={mutation.isPending} className="space-y-4">
+      <label className="block text-sm font-medium">Product<select required className={selectClass} value={productId} disabled={products.isLoading} onChange={(event) => setProductId(event.target.value)}><option value="">{products.isLoading ? "Loading products?" : "Select product"}</option>{products.data?.map((product) => <option key={product.id} value={product.id}>{product.name} ? {product.currentStock} {product.unit} available</option>)}</select></label>{children}
+      {error && <p role="alert" className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</p>}
+      <Button busy={mutation.isPending} disabled={!productId || products.isError} type="submit">{mutation.isPending ? "Saving?" : `Save ${title.toLowerCase()}`}</Button>
+    </fieldset></form></Card>;
 }

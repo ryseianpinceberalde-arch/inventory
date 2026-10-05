@@ -2,7 +2,7 @@ import { Router } from "express";
 import { authenticate, requireAnyPermission, requirePermission } from "../middleware/auth.js";
 import { validate } from "../middleware/validate.js";
 import * as controller from "../controllers/inventoryController.js";
-import { adjustmentSchema, refundSchema, saleSchema, stockInSchema, stockOutSchema } from "../validators/inventoryValidators.js";
+import { adjustmentSchema, heldSaleSchema, refundSchema, saleSchema, stockInSchema, stockOutSchema } from "../validators/inventoryValidators.js";
 
 export const inventoryRoutes = Router();
 inventoryRoutes.use(authenticate);
@@ -30,12 +30,21 @@ adjustmentRoutes.post("/:id/approve", requirePermission("inventory.adjustment_ap
 export const posRoutes = Router();
 posRoutes.use(authenticate);
 posRoutes.post("/sales", requirePermission("pos.access"), requirePermission("sales.create"), validate(saleSchema), controller.completeSale);
+posRoutes.get("/held-sales", requirePermission("pos.access"), requirePermission("sales.resume"), controller.heldSales);
+posRoutes.post("/held-sales", requirePermission("pos.access"), requirePermission("sales.hold"), validate(heldSaleSchema), controller.holdSale);
+posRoutes.delete("/held-sales/:id", requirePermission("pos.access"), requirePermission("sales.resume"), controller.deleteHeldSale);
 
 export const salesRoutes = Router();
 salesRoutes.use(authenticate);
 salesRoutes.get("/", requireAnyPermission(["sales.view_all", "sales.view_own"]), controller.salesList);
 salesRoutes.post("/", requirePermission("sales.create"), validate(saleSchema), controller.completeSale);
 salesRoutes.get("/:id", requireAnyPermission(["sales.view_all", "sales.view_own"]), controller.saleDetail);
+
+export const heldSaleRoutes = Router();
+heldSaleRoutes.use(authenticate);
+heldSaleRoutes.get("/", requirePermission("sales.resume"), controller.heldSales);
+heldSaleRoutes.post("/", requirePermission("sales.hold"), validate(heldSaleSchema), controller.holdSale);
+heldSaleRoutes.delete("/:id", requirePermission("sales.resume"), controller.deleteHeldSale);
 
 export const refundRoutes = Router();
 refundRoutes.use(authenticate);

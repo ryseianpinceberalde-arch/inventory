@@ -1,11 +1,17 @@
 import { useQuery } from "@tanstack/react-query";
-import jsPDF from "jspdf";
-import { Download, FileText } from "lucide-react";
-import { Link, useParams } from "react-router-dom";
+import { Download, FileSpreadsheet, FileText } from "lucide-react";
+import { Link, useParams, useSearchParams } from "react-router-dom";
+import { useEffect, useState } from "react";
+import toast from "react-hot-toast";
 import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";
 import { getData } from "../services/api";
 import { peso } from "../lib/format";
+import { QueryState } from "../components/ui/QueryState";
+import { Pagination } from "../components/ui/Pagination";
+import { Input } from "../components/ui/Input";
+import { useAuth } from "../contexts/AuthContext";
+import type { ReportData } from "../services/reportExporters";
 
 export const reports = [
   { slug: "daily-sales", title: "Daily Sales", description: "Transactions, items sold, net sales, COGS, profit, and average transaction value." },
@@ -21,19 +27,13 @@ export const reports = [
   { slug: "forecast", title: "Sales Forecast", description: "Three-month moving-average sales forecast and suggested reorder demand." }
 ];
 
-interface ReportData {
-  report: string;
-  generatedAt: string;
-  transactionCount: number;
-  itemsSold: number;
-  grossSales: string;
-  netSales: string;
-  profit: string;
-  averageTransactionValue: string;
-  rows: Array<{ id: string; receiptNo: string; total: string; status: string; createdAt: string }>;
+function reportPermission(slug: string) {
+  const names: Record<string, string> = { "daily-sales": "daily", "monthly-sales": "monthly", "yearly-sales": "yearly", "inventory-value": "inventory_value", "supplier-performance": "supplier_performance" };
+  return `reports.${names[slug] ?? slug}`;
 }
 
 export function ReportsIndex() {
+  const { hasPermission } = useAuth();
   return (
     <div className="space-y-4">
       <div>
@@ -41,7 +41,7 @@ export function ReportsIndex() {
         <p className="text-sm text-slate-500">Sales, profit, inventory, supplier, payment, and forecast reports.</p>
       </div>
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-        {reports.map((report) => (
+        {reports.filter((report) => hasPermission(reportPermission(report.slug))).map((report) => (
           <Link key={report.slug} to={`/reports/${report.slug}`}>
             <Card className="h-full transition hover:border-brand">
               <h2 className="font-bold">{report.title}</h2>
@@ -57,51 +57,43 @@ export function ReportsIndex() {
 export function ReportDetail() {
   const { type = "daily-sales" } = useParams();
   const reportMeta = reports.find((report) => report.slug === type);
-  const { data, isLoading } = useQuery({ queryKey: ["report", type], queryFn: () => getData<ReportData>(`/reports/${type}`) });
+  const { hasPermission } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [from, setFrom] = useState(searchParams.get("from") ?? "");
+  const [to, setTo] = useState(searchParams.get("to") ?? "");
+  const [page, setPage] = useState(1);
+  const allowed = hasPermission(reportPermission(type));
+  useEffect(() => { setPage(1); setFrom(searchParams.get("from") ?? ""); setTo(searchParams.get("to") ?? ""); }, [type, searchParams]);
+  const [exporting, setExporting] = useState<"csv" | "excel" | "pdf" | null>(null);
+  const queryString = searchParams.toString();
+  const reportUrl = queryString ? `/reports/${type}?${queryString}` : `/reports/${type}`;
+  const { data, isLoading, isError, refetch } = useQuery({ queryKey: ["report", type, queryString], queryFn: () => getData<ReportData>(reportUrl), enabled: allowed });
 
-  function exportCsv() {
+  async function exportReport(format: "csv" | "excel" | "pdf") {
     if (!data) return;
-    const rows = [
-      ["Report", reportMeta?.title ?? data.report],
-      ["Transaction Count", data.transactionCount],
-      ["Items Sold", data.itemsSold],
-      ["Gross Sales", data.grossSales],
-      ["Net Sales", data.netSales],
-      ["Profit", data.profit],
-      ["Average Transaction Value", data.averageTransactionValue]
-    ];
-    const csv = rows.map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(",")).join("\n");
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `${type}-report.csv`;
-    link.click();
-    URL.revokeObjectURL(url);
+    setExporting(format);
+    try {
+      const { exportReportCsv, exportReportExcel, exportReportPdf } = await import("../services/reportExporters");
+      if (format === "csv") exportReportCsv(data);
+      if (format === "excel") await exportReportExcel(data);
+      if (format === "pdf") exportReportPdf(data);
+      toast.success("Report exported successfully.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Report export failed.");
+    } finally {
+      setExporting(null);
+    }
   }
 
-  function exportPdf() {
-    if (!data) return;
-    const doc = new jsPDF();
-    doc.text(reportMeta?.title ?? data.report, 14, 16);
-    doc.text(`Transactions: ${data.transactionCount}`, 14, 28);
-    doc.text(`Items sold: ${data.itemsSold}`, 14, 38);
-    doc.text(`Gross sales: ${peso(data.grossSales)}`, 14, 48);
-    doc.text(`Net sales: ${peso(data.netSales)}`, 14, 58);
-    doc.text(`Profit: ${peso(data.profit)}`, 14, 68);
-    doc.save(`${type}-report.pdf`);
-  }
+  if (!allowed) return <QueryState empty="You do not have permission to view this report." />;
+  if (isError) return <QueryState error onRetry={() => void refetch()} />;
+  if (isLoading || !data) return <QueryState loading />;
 
-  if (isLoading || !data) return <Card className="h-40 animate-pulse" />;
-
-  const metrics = [
-    ["Transactions", data.transactionCount],
-    ["Items Sold", data.itemsSold],
-    ["Gross Sales", peso(data.grossSales)],
-    ["Net Sales", peso(data.netSales)],
-    ["Profit", peso(data.profit)],
-    ["Average Ticket", peso(data.averageTransactionValue)]
-  ];
+  const metrics = data.summary.map((item) => [
+    item.label,
+    item.type === "currency" ? peso(item.value) : item.type === "percent" ? `${Number(item.value).toFixed(2)}%` : item.value
+  ]);
+  const exportDisabled = Boolean(exporting);
 
   return (
     <div className="space-y-4">
@@ -110,22 +102,36 @@ export function ReportDetail() {
           <h1 className="text-2xl font-bold">{reportMeta?.title ?? data.report}</h1>
           <p className="text-sm text-slate-500">{reportMeta?.description}</p>
         </div>
-        <div className="flex gap-2">
-          <Button onClick={exportCsv} className="bg-slate-700"><Download size={16} /> CSV</Button>
-          <Button onClick={exportPdf} className="bg-accent"><FileText size={16} /> PDF</Button>
-        </div>
+        {hasPermission("reports.export") && <div className="flex flex-wrap gap-2">
+          <Button disabled={exportDisabled} onClick={() => void exportReport("csv")} className="bg-slate-700"><Download size={16} /> {exporting === "csv" ? "Generating..." : "CSV"}</Button>
+          <Button disabled={exportDisabled} onClick={() => void exportReport("excel")} className="bg-emerald-700 hover:bg-emerald-800"><FileSpreadsheet size={16} /> {exporting === "excel" ? "Generating..." : "Excel"}</Button>
+          <Button disabled={exportDisabled} onClick={() => void exportReport("pdf")} className="bg-accent"><FileText size={16} /> {exporting === "pdf" ? "Generating..." : "PDF"}</Button>
+        </div>}
       </div>
+      <Card><form className="flex flex-wrap items-end gap-3" onSubmit={(event) => { event.preventDefault(); if (from && to && from > to) { toast.error("Start date must be before end date"); return; } const params = new URLSearchParams(searchParams); if (from) params.set("from", from); else params.delete("from"); if (to) params.set("to", to); else params.delete("to"); setSearchParams(params); }}><label className="text-sm font-medium">From<Input className="mt-1" type="date" value={from} onChange={(event) => setFrom(event.target.value)} /></label><label className="text-sm font-medium">To<Input className="mt-1" type="date" min={from || undefined} value={to} onChange={(event) => setTo(event.target.value)} /></label><Button type="submit">Apply dates</Button><Button type="button" className="bg-slate-700" onClick={() => setSearchParams({})}>Reset filters</Button></form><p className="mt-3 text-sm text-slate-500">Reporting period: {data.period} ? Asia/Manila</p></Card>
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {metrics.map(([label, value]) => <Card key={label}><div className="text-xs uppercase text-slate-500">{label}</div><div className="mt-2 text-2xl font-bold">{value}</div></Card>)}
       </div>
       <Card>
-        <h2 className="mb-4 font-semibold">Recent source transactions</h2>
+        <h2 className="mb-4 font-semibold">Report details</h2>
         <div className="overflow-x-auto">
           <table className="w-full min-w-[640px] text-left text-sm">
-            <thead><tr className="border-b text-xs uppercase text-slate-500"><th className="py-3">Receipt</th><th>Total</th><th>Status</th><th>Date</th></tr></thead>
-            <tbody>{data.rows.map((row) => <tr key={row.id} className="border-b last:border-0"><td className="py-3">{row.receiptNo}</td><td>{peso(row.total)}</td><td>{row.status}</td><td>{new Date(row.createdAt).toLocaleString()}</td></tr>)}</tbody>
+            <thead><tr className="border-b text-xs uppercase text-slate-500">{data.columns.map((column) => <th key={column.key} className="py-3 pr-4">{column.label}</th>)}</tr></thead>
+            <tbody>
+              {data.rows.length === 0 && <tr><td className="py-6 text-slate-500" colSpan={data.columns.length}>No data is available for the selected reporting period.</td></tr>}
+              {data.rows.slice((page - 1) * 25, page * 25).map((row, index) => (
+                <tr key={index} className="border-b last:border-0">
+                  {data.columns.map((column) => (
+                    <td key={column.key} className="py-3 pr-4">
+                      {column.type === "currency" ? peso(row[column.key] ?? 0) : column.type === "percent" ? `${Number(row[column.key] ?? 0).toFixed(2)}%` : String(row[column.key] ?? "")}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
           </table>
         </div>
+        <Pagination currentPage={page} pageSize={25} totalItems={data.rows.length} onPageChange={setPage} />
       </Card>
     </div>
   );

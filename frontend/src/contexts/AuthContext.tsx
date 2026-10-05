@@ -1,4 +1,5 @@
 import { createContext, ReactNode, useContext, useEffect, useMemo, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
 import { api, setAccessToken } from "../services/api";
 import type { ApiResponse, User } from "../types/api";
@@ -16,8 +17,15 @@ interface AuthContextValue {
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
+  const queryClient = useQueryClient();
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    function expire() { setUser(null); queryClient.clear(); }
+    window.addEventListener("smartstock:session-expired", expire);
+    return () => window.removeEventListener("smartstock:session-expired", expire);
+  }, [queryClient]);
 
   useEffect(() => {
     api.post<ApiResponse<{ accessToken: string; user: User }>>("/auth/refresh", {})
@@ -39,12 +47,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const response = await api.post<ApiResponse<{ accessToken: string; user: User }>>("/auth/login", { email, password });
       setAccessToken(response.data.data.accessToken);
       const me = await api.get<ApiResponse<User>>("/auth/me");
+      queryClient.clear();
       setUser(me.data.data);
       toast.success("Signed in");
     },
     async logout() {
       await api.post("/auth/logout");
       setAccessToken(null);
+      queryClient.clear();
+      sessionStorage.removeItem("smartstock.pos.cart");
+      sessionStorage.removeItem("smartstock.pos.paymongo.pending");
       setUser(null);
     },
     hasPermission(permission: string) {
@@ -56,7 +68,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     hasAllPermissions(permissions: string[]) {
       return Boolean(user && permissions.every((permission) => user.permissions.includes(permission)));
     }
-  }), [loading, user]);
+  }), [loading, user, queryClient]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

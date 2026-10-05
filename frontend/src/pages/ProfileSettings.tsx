@@ -1,9 +1,8 @@
 import { useState } from "react";
-import toast from "react-hot-toast";
 import { useAuth } from "../contexts/AuthContext";
 import { Card } from "../components/ui/Card";
 import { Input } from "../components/ui/Input";
-import { Button } from "../components/ui/Button";
+import { ActionForm } from "../components/ui/ActionForm";
 import { api } from "../services/api";
 
 export function Profile() {
@@ -14,11 +13,11 @@ export function Profile() {
     <Card className="max-w-xl">
       <h1 className="text-xl font-bold">{user?.fullName}</h1>
       <p className="text-sm text-slate-500">{user?.email} . {user?.role.name}</p>
-      <div className="mt-6 space-y-3">
-        <Input type="password" placeholder="Current password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} />
-        <Input type="password" placeholder="New password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} />
-        <Button onClick={async () => { await api.post("/auth/change-password", { currentPassword, newPassword }); toast.success("Password changed"); }}>Change password</Button>
-      </div>
+      <ActionForm label="Change password" success="Password changed. Other sessions will need to sign in again." submit={async () => { await api.post("/auth/change-password", { currentPassword, newPassword }); setCurrentPassword(""); setNewPassword(""); }}>
+        <label className="block text-sm font-medium">Current password<Input required className="mt-1" autoComplete="current-password" type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} /></label>
+        <label className="block text-sm font-medium">New password<Input required minLength={8} maxLength={72} className="mt-1" autoComplete="new-password" type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} /></label>
+        <p className="text-xs text-slate-500">Use at least 8 characters.</p>
+      </ActionForm>
     </Card>
   );
 }

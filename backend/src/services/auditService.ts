@@ -1,4 +1,5 @@
 import { prisma } from "../config/prisma.js";
+import { stripSecrets } from "../rbac/serializers.js";
 
 export async function audit(input: {
   userId?: string;
@@ -16,8 +17,8 @@ export async function audit(input: {
       action: input.action,
       module: input.module,
       recordId: input.recordId,
-      oldData: input.oldData === undefined ? undefined : JSON.parse(JSON.stringify(input.oldData)),
-      newData: input.newData === undefined ? undefined : JSON.parse(JSON.stringify(input.newData)),
+      oldData: input.oldData === undefined ? undefined : JSON.parse(JSON.stringify(stripSecrets(input.oldData))),
+      newData: input.newData === undefined ? undefined : JSON.parse(JSON.stringify(stripSecrets(input.newData))),
       ipAddress: input.ipAddress,
       userAgent: input.userAgent
     }

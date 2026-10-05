@@ -5,17 +5,12 @@ import { asyncHandler } from "../utils/asyncHandler.js";
 import { created, ok } from "../utils/apiResponse.js";
 import { AppError } from "../utils/AppError.js";
 import { audit } from "../services/auditService.js";
+import { paginationQuery } from "../validators/common.js";
 import * as catalog from "../services/catalogService.js";
 import { serializeForPermissions } from "../rbac/serializers.js";
 
 function parseList(req: Request) {
-  return {
-    page: Math.max(Number(req.query.page ?? 1), 1),
-    limit: Math.min(Math.max(Number(req.query.limit ?? 20), 1), 100),
-    search: typeof req.query.search === "string" ? req.query.search : undefined,
-    sortBy: typeof req.query.sortBy === "string" ? req.query.sortBy : undefined,
-    sortOrder: req.query.sortOrder === "asc" ? "asc" as const : "desc" as const
-  };
+  return paginationQuery.parse(req.query);
 }
 
 function skuPart(value: string) {
@@ -42,18 +37,19 @@ export const listProducts = asyncHandler(async (req: Request, res: Response) => 
   if (status && status !== "ALL" && status !== ProductStatus.ACTIVE && status !== ProductStatus.ARCHIVED) {
     throw new AppError("Invalid product status filter", 422);
   }
+  const paging = parseList(req);
   const result = await catalog.listProducts({
-    ...parseList(req),
+    ...paging,
     categoryId: typeof req.query.categoryId === "string" ? req.query.categoryId : undefined,
     supplierId: typeof req.query.supplierId === "string" ? req.query.supplierId : undefined,
     stockStatus: typeof req.query.stockStatus === "string" ? req.query.stockStatus : undefined,
     status: status as ProductStatus | "ALL" | undefined
   });
   return ok(res, "Products loaded", serializeForPermissions(result.items, req.user?.permissions ?? []), {
-    page: Number(req.query.page ?? 1),
-    limit: Number(req.query.limit ?? 20),
+    page: paging.page,
+    limit: paging.limit,
     total: result.total,
-    totalPages: Math.ceil(result.total / Number(req.query.limit ?? 20))
+    totalPages: Math.ceil(result.total / paging.limit)
   });
 });
 
@@ -97,7 +93,21 @@ export const getProduct = asyncHandler(async (req: Request, res: Response) => {
 export const updateProduct = asyncHandler(async (req: Request, res: Response) => {
   const old = await prisma.product.findUnique({ where: { id: req.params.id } });
   if (!old) throw new AppError("Product not found", 404);
-  const product = await prisma.product.update({ where: { id: req.params.id }, data: req.body, include: { category: true, primarySupplier: true } });
+  const product = await prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM "Product" WHERE id = ${req.params.id}::uuid FOR UPDATE`;
+    const current = await tx.product.findUniqueOrThrow({ where: { id: req.params.id } });
+    if (req.body.barcode && req.body.barcode !== current.barcode) {
+      const duplicate = await tx.product.findFirst({ where: { id: { not: current.id }, OR: [{ barcode: req.body.barcode }, { barcodes: { some: { code: req.body.barcode } } }] } });
+      if (duplicate) throw new AppError("This barcode is already assigned to another product.", 409);
+      await tx.productBarcode.upsert({ where: { code: req.body.barcode }, update: {}, create: { productId: current.id, code: req.body.barcode } });
+    }
+    if (req.body.currentStock !== undefined && req.body.currentStock !== current.currentStock) {
+      if (!req.user?.permissions.includes("inventory.adjustment_approve")) throw new AppError("Use Inventory adjustment to change an existing stock quantity.", 403);
+      await tx.stockMovement.create({ data: { productId: current.id, employeeId: req.user.id, previousQuantity: current.currentStock, quantityChanged: req.body.currentStock - current.currentStock, newQuantity: req.body.currentStock, movementType: "ADJUSTMENT", referenceNo: `EDIT-${current.id}-${Date.now()}`, reason: "Product stock correction" } });
+    }
+    if (req.body.primarySupplierId) await tx.supplierProduct.upsert({ where: { supplierId_productId: { supplierId: req.body.primarySupplierId, productId: current.id } }, update: {}, create: { supplierId: req.body.primarySupplierId, productId: current.id } });
+    return tx.product.update({ where: { id: current.id }, data: req.body, include: { category: true, primarySupplier: true } });
+  });
   await audit({ userId: req.user?.id, action: "PRODUCT_UPDATE", module: "PRODUCTS", recordId: product.id, oldData: old, newData: product });
   return ok(res, "Product updated", serializeForPermissions(product, req.user?.permissions ?? []));
 });
@@ -174,6 +184,8 @@ export const listSupplierProducts = asyncHandler(async (req: Request, res: Respo
   });
   const data = rows.map((row) => ({
     id: row.id,
+    supplierId: row.supplierId,
+    productId: row.productId,
     supplier: row.supplier.name,
     product: row.product.name,
     sku: row.product.sku,
@@ -185,6 +197,42 @@ export const listSupplierProducts = asyncHandler(async (req: Request, res: Respo
     status: row.product.status
   }));
   return ok(res, "Supplier products loaded", serializeForPermissions(data, req.user?.permissions ?? []));
+});
+
+export const updateSupplierProduct = asyncHandler(async (req: Request, res: Response) => {
+  const old = await prisma.supplierProduct.findUnique({ where: { id: req.params.id }, include: { supplier: true, product: true } });
+  if (!old) throw new AppError("Supplier product not found", 404);
+
+  const duplicate = await prisma.supplierProduct.findFirst({
+    where: {
+      supplierId: req.body.supplierId,
+      productId: req.body.productId,
+      id: { not: req.params.id }
+    }
+  });
+  if (duplicate) throw new AppError("This supplier product already exists.", 409);
+
+  const row = await prisma.supplierProduct.update({
+    where: { id: req.params.id },
+    data: { supplierId: req.body.supplierId, productId: req.body.productId },
+    include: { supplier: true, product: { include: { category: true } } }
+  });
+  const data = {
+    id: row.id,
+    supplierId: row.supplierId,
+    productId: row.productId,
+    supplier: row.supplier.name,
+    product: row.product.name,
+    sku: row.product.sku,
+    barcode: row.product.barcode,
+    category: row.product.category.name,
+    currentStock: row.product.currentStock,
+    costPrice: row.product.costPrice,
+    sellingPrice: row.product.sellingPrice,
+    status: row.product.status
+  };
+  await audit({ userId: req.user?.id, action: "SUPPLIER_PRODUCT_UPDATE", module: "SUPPLIERS", recordId: row.id, oldData: old, newData: row });
+  return ok(res, "Supplier product updated", serializeForPermissions(data, req.user?.permissions ?? []));
 });
 
 export const getSupplier = asyncHandler(async (req: Request, res: Response) => {
@@ -201,8 +249,8 @@ export const updateSupplier = asyncHandler(async (req: Request, res: Response) =
   return ok(res, "Supplier updated", await prisma.supplier.update({ where: { id: req.params.id }, data: req.body }));
 });
 
-export const listCustomers = asyncHandler(async (_req: Request, res: Response) => {
-  return ok(res, "Customers loaded", await prisma.customer.findMany({ include: { sales: { take: 5, orderBy: { createdAt: "desc" } } }, orderBy: { fullName: "asc" } }));
+export const listCustomers = asyncHandler(async (req: Request, res: Response) => {
+  return ok(res, "Customers loaded", serializeForPermissions(await prisma.customer.findMany({ orderBy: { fullName: "asc" } }), req.user?.permissions ?? []));
 });
 
 export const getCustomer = asyncHandler(async (req: Request, res: Response) => {

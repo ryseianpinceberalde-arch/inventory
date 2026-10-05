@@ -1,12 +1,12 @@
 import { Router } from "express";
-import { authenticate, requirePermission } from "../middleware/auth.js";
+import { authenticate, requireAnyPermission, requirePermission } from "../middleware/auth.js";
 import { validate } from "../middleware/validate.js";
 import * as controller from "../controllers/catalogController.js";
-import { categorySchema, customerSchema, productSchema, supplierSchema } from "../validators/catalogValidators.js";
+import { categorySchema, customerSchema, productSchema, supplierProductSchema, supplierSchema } from "../validators/catalogValidators.js";
 
 export const productRoutes = Router();
 productRoutes.use(authenticate);
-productRoutes.get("/", requirePermission("products.view"), controller.listProducts);
+productRoutes.get("/", requireAnyPermission(["products.view", "pos.access", "inventory.view", "inventory.stock_in", "inventory.stock_out", "inventory.adjustment_create", "barcodes.view"]), controller.listProducts);
 productRoutes.post("/", requirePermission("products.create"), validate(productSchema), controller.createProduct);
 productRoutes.get("/barcode/:code", requirePermission("barcodes.view"), controller.barcodeLookup);
 productRoutes.get("/:id", requirePermission("products.view"), controller.getProduct);
@@ -35,6 +35,7 @@ supplierRoutes.put("/:id", requirePermission("suppliers.update"), validate(suppl
 export const supplierProductRoutes = Router();
 supplierProductRoutes.use(authenticate);
 supplierProductRoutes.get("/", requirePermission("suppliers.view"), controller.listSupplierProducts);
+supplierProductRoutes.put("/:id", requirePermission("suppliers.update"), validate(supplierProductSchema), controller.updateSupplierProduct);
 
 export const customerRoutes = Router();
 customerRoutes.use(authenticate);

@@ -1,5 +1,5 @@
 import { Request, Response } from "express";
-import { RoleName } from "@prisma/client";
+import { Prisma, RoleName } from "@prisma/client";
 import { prisma } from "../config/prisma.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { created, ok } from "../utils/apiResponse.js";
@@ -27,6 +27,25 @@ export const createAdjustment = asyncHandler(async (req: Request, res: Response)
   if (!req.user) throw new AppError("Authentication required", 401);
   const adjustment = await inventory.requestAdjustment({ ...req.body, requestedById: req.user.id });
   return created(res, "Inventory adjustment recorded", adjustment);
+});
+
+export const heldSales = asyncHandler(async (req: Request, res: Response) => {
+  if (!req.user) throw new AppError("Authentication required", 401);
+  return ok(res, "Held orders loaded", serializeForPermissions(await sales.listHeldSales(req.user.id), req.user.permissions));
+});
+
+export const holdSale = asyncHandler(async (req: Request, res: Response) => {
+  if (!req.user) throw new AppError("Authentication required", 401);
+  const heldSale = await sales.holdSale({ ...req.body, cashierId: req.user.id });
+  await audit({ userId: req.user.id, action: "SALE_HOLD", module: "SALES", recordId: heldSale.id, newData: heldSale });
+  return created(res, "Order held", serializeForPermissions(heldSale, req.user.permissions));
+});
+
+export const deleteHeldSale = asyncHandler(async (req: Request, res: Response) => {
+  if (!req.user) throw new AppError("Authentication required", 401);
+  await sales.deleteHeldSale(req.params.id, req.user.id);
+  await audit({ userId: req.user.id, action: "SALE_RESUME", module: "SALES", recordId: req.params.id });
+  return ok(res, "Held order removed", {});
 });
 
 export const approveAdjustment = asyncHandler(async (req: Request, res: Response) => {
@@ -82,20 +101,26 @@ export const saleDetail = asyncHandler(async (req: Request, res: Response) => {
   return ok(res, "Sale loaded", serializeForPermissions(sale, req.user.permissions));
 });
 
+export function notificationScope(roleName: string): Prisma.NotificationWhereInput {
+  const role = Object.values(RoleName).find((name) => name === roleName);
+  return role ? { OR: [{ recipientRole: role }, { recipientRole: null }] } : { recipientRole: null };
+}
+
 export const notifications = asyncHandler(async (req: Request, res: Response) => {
   if (!req.user) throw new AppError("Authentication required", 401);
-  const role = Object.values(RoleName).includes(req.user.roleName as RoleName) ? req.user.roleName as RoleName : undefined;
-  return ok(res, "Notifications loaded", await prisma.notification.findMany({ where: { OR: [{ recipientRole: role }, { recipientRole: null }] }, include: { product: true }, orderBy: { createdAt: "desc" } }));
+  return ok(res, "Notifications loaded", serializeForPermissions(await prisma.notification.findMany({ where: notificationScope(req.user.roleName), include: { product: true }, orderBy: { createdAt: "desc" } }), req.user.permissions));
 });
 
 export const markNotificationRead = asyncHandler(async (req: Request, res: Response) => {
-  return ok(res, "Notification marked as read", await prisma.notification.update({ where: { id: req.params.id }, data: { isRead: true } }));
+  if (!req.user) throw new AppError("Authentication required", 401);
+  const result = await prisma.notification.updateMany({ where: { id: req.params.id, ...notificationScope(req.user.roleName) }, data: { isRead: true } });
+  if (!result.count) throw new AppError("Notification not found", 404);
+  return ok(res, "Notification marked as read", {});
 });
 
 export const markAllRead = asyncHandler(async (req: Request, res: Response) => {
   if (!req.user) throw new AppError("Authentication required", 401);
-  const role = Object.values(RoleName).includes(req.user.roleName as RoleName) ? req.user.roleName as RoleName : undefined;
-  await prisma.notification.updateMany({ where: { recipientRole: role }, data: { isRead: true } });
+  await prisma.notification.updateMany({ where: notificationScope(req.user.roleName), data: { isRead: true } });
   return ok(res, "Notifications marked as read", {});
 });
 

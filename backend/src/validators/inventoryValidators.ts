@@ -1,18 +1,18 @@
 import { z } from "zod";
-import { money } from "./common.js";
+import { money, dateValue, uniqueProducts } from "./common.js";
 
 export const stockInSchema = z.object({
   referenceNo: z.string().min(3),
   supplierId: z.string().uuid(),
-  deliveryDate: z.string(),
+  deliveryDate: dateValue,
   notes: z.string().optional(),
   items: z.array(z.object({
     productId: z.string().uuid(),
     quantity: z.coerce.number().int().positive(),
     unitCost: money,
-    expirationDate: z.string().optional().nullable(),
+    expirationDate: dateValue.optional().nullable(),
     batchNumber: z.string().optional()
-  })).min(1)
+  })).min(1).max(200).refine(uniqueProducts, "Each product must appear only once")
 });
 
 export const stockOutSchema = z.object({
@@ -36,12 +36,23 @@ export const saleSchema = z.object({
   paymentMethod: z.enum(["CASH", "GCASH", "MAYA", "BANK_TRANSFER", "DEBIT_CARD", "CREDIT_CARD", "CUSTOMER_CREDIT", "MIXED"]),
   amountPaid: money,
   transactionDiscount: money.default("0"),
-  idempotencyKey: z.string().min(8),
+  idempotencyKey: z.string().min(8).max(200),
+  checkoutSessionId: z.string().regex(/^cs_[A-Za-z0-9]+$/).optional(),
   items: z.array(z.object({
     productId: z.string().uuid(),
     quantity: z.coerce.number().int().positive(),
     productDiscount: money.default("0")
-  })).min(1)
+  })).min(1).max(200).refine(uniqueProducts, "Each product must appear only once")
+});
+
+export const heldSaleSchema = z.object({
+  customerId: z.string().uuid().optional().nullable(),
+  notes: z.string().optional(),
+  items: z.array(z.object({
+    productId: z.string().uuid(),
+    quantity: z.coerce.number().int().positive(),
+    productDiscount: money.default("0")
+  })).min(1).max(200).refine(uniqueProducts, "Each product must appear only once")
 });
 
 export const refundSchema = z.object({
@@ -52,5 +63,5 @@ export const refundSchema = z.object({
     saleItemId: z.string().uuid(),
     quantity: z.coerce.number().int().positive(),
     condition: z.enum(["Return to inventory", "Damaged", "Defective", "Return to supplier"])
-  })).min(1)
+  })).min(1).max(200).refine((items) => new Set(items.map((item) => item.saleItemId)).size === items.length, "Each sale item must appear only once")
 });

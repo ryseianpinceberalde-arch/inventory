@@ -15,7 +15,8 @@ export async function authenticate(req: Request, _res: Response, next: NextFunct
     const token = header?.startsWith("Bearer ") ? header.slice(7) : undefined;
     if (!token) throw new AppError("Authentication is required.", 401);
 
-    const payload = jwt.verify(token, env.JWT_ACCESS_SECRET) as AccessPayload;
+    const payload = jwt.verify(token, env.JWT_ACCESS_SECRET, { algorithms: ["HS256"] }) as AccessPayload;
+    if (typeof payload.sub !== "string") throw new AppError("Authentication is required.", 401);
     const user = await prisma.user.findUnique({
       where: { id: payload.sub },
       include: {
@@ -43,7 +44,7 @@ export async function authenticate(req: Request, _res: Response, next: NextFunct
     };
     next();
   } catch (error) {
-    next(error instanceof AppError ? error : new AppError("Authentication is required.", 401));
+    next(error instanceof jwt.JsonWebTokenError ? new AppError("Authentication is required.", 401) : error);
   }
 }
 

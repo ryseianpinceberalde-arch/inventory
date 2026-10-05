@@ -5,9 +5,9 @@ export function peso(value: number | string) {
 }
 
 export function manilaDate(value: string | Date, pattern = "MMMM d, yyyy") {
-  return format(new Date(value), pattern);
+  return format(new Date(new Date(value).toLocaleString("en-US", { timeZone: "Asia/Manila" })), pattern);
 }
 
 export function manilaTime(value: string | Date) {
-  return format(new Date(value), "h:mm a");
+  return new Intl.DateTimeFormat("en-PH", { timeZone: "Asia/Manila", hour: "numeric", minute: "2-digit" }).format(new Date(value));
 }

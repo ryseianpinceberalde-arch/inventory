@@ -15,9 +15,10 @@ interface CameraBarcodeScannerProps {
   onClose: () => void;
   onScan: (barcode: string) => void;
   continuous?: boolean;
+  compact?: boolean;
 }
 
-export function CameraBarcodeScanner({ onClose, onScan, continuous = false }: CameraBarcodeScannerProps) {
+export function CameraBarcodeScanner({ onClose, onScan, continuous = false, compact = false }: CameraBarcodeScannerProps) {
   const generatedId = useId().replace(/:/g, "");
   const readerId = `barcode-camera-${generatedId}`;
   const scannerRef = useRef<Html5Qrcode | null>(null);
@@ -98,8 +99,8 @@ export function CameraBarcodeScanner({ onClose, onScan, continuous = false }: Ca
           {
             fps: 30,
             qrbox: (viewfinderWidth, viewfinderHeight) => ({
-              width: Math.floor(viewfinderWidth * 0.98),
-              height: Math.floor(Math.min(viewfinderHeight * 0.42, 260))
+              width: Math.floor(viewfinderWidth * (compact ? 0.9 : 0.98)),
+              height: Math.floor(Math.min(viewfinderHeight * (compact ? 0.36 : 0.42), compact ? 140 : 260))
             }),
             aspectRatio: 1.777778,
             disableFlip: true
@@ -137,10 +138,10 @@ export function CameraBarcodeScanner({ onClose, onScan, continuous = false }: Ca
       cancelled = true;
       void stopScanner();
     };
-  }, [cameraId, continuous, onScan, readerId, stopScanner]);
+  }, [cameraId, compact, continuous, onScan, readerId, stopScanner]);
 
   return (
-    <div className="space-y-3">
+    <div className={compact ? "space-y-2" : "space-y-3"}>
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2 text-sm font-semibold">
           <Camera size={18} />
@@ -152,7 +153,7 @@ export function CameraBarcodeScanner({ onClose, onScan, continuous = false }: Ca
         </Button>
       </div>
 
-      <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
+      <div className={`grid gap-2 ${compact ? "sm:grid-cols-[minmax(0,1fr)_auto]" : "sm:grid-cols-[1fr_auto]"}`}>
         <select
           className="h-10 w-full rounded-md border border-line bg-white px-3 text-sm outline-none focus:border-brand dark:border-slate-700 dark:bg-slate-950"
           value={cameraId}
@@ -169,12 +170,12 @@ export function CameraBarcodeScanner({ onClose, onScan, continuous = false }: Ca
       </div>
 
       <div className="overflow-hidden rounded-md border border-line bg-slate-950 dark:border-slate-700">
-        <div id={readerId} className="min-h-[260px] w-full text-white [&_video]:w-full" />
+        <div id={readerId} className={`${compact ? "min-h-[150px] [&_video]:max-h-[180px]" : "min-h-[260px]"} w-full text-white [&_video]:w-full [&_video]:object-cover`} />
       </div>
 
-      <p className="text-sm text-slate-600 dark:text-slate-300">{status}</p>
-      {detectedBarcode && <p className="text-sm text-teal-700">Detected: {detectedBarcode}</p>}
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      <p className={`${compact ? "text-xs" : "text-sm"} text-slate-600 dark:text-slate-300`}>{status}</p>
+      {detectedBarcode && <p className={`${compact ? "text-xs" : "text-sm"} text-teal-700`}>Detected: {detectedBarcode}</p>}
+      {error && <p className={`${compact ? "text-xs" : "text-sm"} text-red-600`}>{error}</p>}
     </div>
   );
 }

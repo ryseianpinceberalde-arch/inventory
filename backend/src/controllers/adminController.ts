@@ -1,3 +1,5 @@
+import { saleLineTotals, saleTotals } from "../utils/saleTotals.js";
+import { businessDateKey, businessDayStart } from "../utils/businessDate.js";
 import bcrypt from "bcrypt";
 import crypto from "node:crypto";
 import { Request, Response } from "express";
@@ -8,6 +10,7 @@ import { created, ok } from "../utils/apiResponse.js";
 import { audit } from "../services/auditService.js";
 import { AppError } from "../utils/AppError.js";
 import { serializeForPermissions } from "../rbac/serializers.js";
+import { buildReport } from "../services/reportService.js";
 
 const userSelect = {
   id: true,
@@ -27,11 +30,28 @@ function isAdminRoleName(name?: string) {
 async function ensureCanTouchUser(actor: Express.User | undefined, targetRoleId?: string) {
   if (!actor) throw new AppError("Authentication is required.", 401);
   if (!targetRoleId) return;
-  const targetRole = await prisma.role.findUnique({ where: { id: targetRoleId } });
+  const targetRole = await prisma.role.findUnique({ where: { id: targetRoleId }, include: { rolePermissions: { include: { permission: true } } } });
   if (!targetRole) throw new AppError("Role not found", 404);
-  if (isAdminRoleName(targetRole.name) && !isAdminRoleName(actor.roleName)) {
+  if (!isAdminRoleName(actor.roleName) && (isAdminRoleName(targetRole.name) || targetRole.rolePermissions.some((row) => !actor.permissions.includes(row.permission.key)))) {
     throw new AppError("You do not have permission to perform this action.", 403);
   }
+}
+
+
+async function updateUserSafely(id: string, data: Prisma.UserUpdateInput, actor: Express.User) {
+  return prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT 1 FROM pg_advisory_xact_lock(hashtext('smartstock-admin-membership'))`;
+    const old = await tx.user.findUniqueOrThrow({ where: { id }, include: { role: true } });
+    if (data.status === "INACTIVE" && id === actor.id) throw new AppError("You cannot deactivate your own account.", 409);
+    if (data.status && data.status !== old.status && !actor.permissions.includes(data.status === "ACTIVE" ? "users.activate" : "users.deactivate")) throw new AppError("You do not have permission to change account status.", 403);
+    const nextRoleId = data.role?.connect?.id;
+    if (old.status === "ACTIVE" && old.role.name === RoleName.ADMIN && (data.status === "INACTIVE" || (nextRoleId && nextRoleId !== old.roleId))) {
+      if (await tx.user.count({ where: { status: "ACTIVE", role: { name: RoleName.ADMIN } } }) <= 1) throw new AppError("The final active Admin cannot be removed.", 409);
+    }
+    const updated = await tx.user.update({ where: { id }, data, select: userSelect });
+    if (data.status === "INACTIVE" || nextRoleId) await tx.refreshToken.updateMany({ where: { userId: id, revokedAt: null }, data: { revokedAt: new Date() } });
+    return updated;
+  });
 }
 
 function has(permission: string, user?: Express.User) {
@@ -67,7 +87,8 @@ export const updateUser = asyncHandler(async (req: Request, res: Response) => {
     if (!has("users.assign_role", req.user)) throw new AppError("You do not have permission to perform this action.", 403);
     await ensureCanTouchUser(req.user, req.body.roleId);
   }
-  const user = await prisma.user.update({ where: { id: req.params.id }, data: req.body, select: userSelect });
+  const { roleId, ...data } = req.body;
+  const user = await updateUserSafely(req.params.id, { ...data, ...(roleId ? { role: { connect: { id: roleId } } } : {}) }, req.user!);
   await audit({ userId: req.user?.id, action: "USER_UPDATE", module: "USERS", recordId: user.id, oldData: old, newData: user, ipAddress: req.ip, userAgent: req.get("user-agent") });
   return ok(res, "User updated", user);
 });
@@ -85,7 +106,7 @@ export const updateUserStatus = asyncHandler(async (req: Request, res: Response)
     const activeAdmins = await prisma.user.count({ where: { status: "ACTIVE", role: { name: RoleName.ADMIN } } });
     if (activeAdmins <= 1) throw new AppError("The final active Admin cannot be deactivated.", 409);
   }
-  const user = await prisma.user.update({ where: { id: req.params.id }, data: { status }, select: userSelect });
+  const user = await updateUserSafely(req.params.id, { status }, req.user!);
   await audit({ userId: req.user?.id, action: status === "ACTIVE" ? "USER_ACTIVATED" : "USER_DEACTIVATED", module: "USERS", recordId: user.id, oldData: old, newData: user, ipAddress: req.ip, userAgent: req.get("user-agent") });
   return ok(res, "User status updated", user);
 });
@@ -97,7 +118,7 @@ export const updateUserRole = asyncHandler(async (req: Request, res: Response) =
   if (!old) throw new AppError("User not found", 404);
   await ensureCanTouchUser(req.user, old.role.id);
   await ensureCanTouchUser(req.user, roleId);
-  const user = await prisma.user.update({ where: { id: req.params.id }, data: { roleId }, select: userSelect });
+  const user = await updateUserSafely(req.params.id, { role: { connect: { id: roleId } } }, req.user!);
   await audit({ userId: req.user?.id, action: "USER_ROLE_CHANGED", module: "USERS", recordId: user.id, oldData: old.role, newData: user.role, ipAddress: req.ip, userAgent: req.get("user-agent") });
   return ok(res, "User role updated", user);
 });
@@ -125,6 +146,7 @@ export const role = asyncHandler(async (req: Request, res: Response) => {
 export const createRole = asyncHandler(async (req: Request, res: Response) => {
   const name = typeof req.body.name === "string" ? req.body.name.trim() : "";
   if (name.length < 2) throw new AppError("Role name is required", 422);
+  if (Object.values(RoleName).some((reserved) => reserved === name.toUpperCase())) throw new AppError("This role name is reserved.", 409);
   const role = await prisma.role.create({ data: { name, description: req.body.description, isSystem: false } });
   await audit({ userId: req.user?.id, action: "ROLE_CREATED", module: "ROLES", recordId: role.id, newData: role, ipAddress: req.ip, userAgent: req.get("user-agent") });
   return created(res, "Role created", role);
@@ -134,6 +156,7 @@ export const updateRole = asyncHandler(async (req: Request, res: Response) => {
   const old = await prisma.role.findUnique({ where: { id: req.params.id } });
   if (!old) throw new AppError("Role not found", 404);
   if (old.name === RoleName.ADMIN && !isAdminRoleName(req.user?.roleName)) throw new AppError("You do not have permission to perform this action.", 403);
+  if (req.body.name && req.body.name !== old.name && (old.isSystem || Object.values(RoleName).some((reserved) => reserved === req.body.name.toUpperCase()))) throw new AppError("System role names cannot be changed or reused.", 409);
   const role = await prisma.role.update({ where: { id: req.params.id }, data: { name: req.body.name, description: req.body.description } });
   await audit({ userId: req.user?.id, action: "ROLE_UPDATED", module: "ROLES", recordId: role.id, oldData: old, newData: role, ipAddress: req.ip, userAgent: req.get("user-agent") });
   return ok(res, "Role updated", role);
@@ -160,6 +183,7 @@ export const updateRolePermissions = asyncHandler(async (req: Request, res: Resp
     if (permissions.length !== new Set(keys).size) throw new AppError("One or more permissions are invalid.", 422);
     const currentKeys = new Set(role.rolePermissions.map((row) => row.permission.key));
     const nextKeys = new Set(keys);
+    if (role.name === RoleName.ADMIN && [...currentKeys].some((key) => !nextKeys.has(key))) throw new AppError("System Admin permissions cannot be removed.", 409);
     const removed = [...currentKeys].filter((key) => !nextKeys.has(key));
     const added = [...nextKeys].filter((key) => !currentKeys.has(key));
     if (!isAdminRoleName(req.user?.roleName)) {
@@ -213,12 +237,12 @@ export const saveSetting = asyncHandler(async (req: Request, res: Response) => {
 });
 
 export const dashboard = asyncHandler(async (req: Request, res: Response) => {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const startMonth = new Date(today.getFullYear(), today.getMonth(), 1);
-  const startYear = new Date(today.getFullYear(), 0, 1);
+  const today = businessDayStart(new Date());
+  const dayKey = businessDateKey(today);
+  const startMonth = new Date(`${dayKey.slice(0, 7)}-01T00:00:00+08:00`);
+  const startYear = new Date(`${dayKey.slice(0, 4)}-01-01T00:00:00+08:00`);
   const [sales, products, customers, suppliers, employees, pendingDeliveries, movements] = await Promise.all([
-    prisma.sale.findMany({ where: { status: "COMPLETED" }, include: { items: { include: { product: { include: { category: true } } } }, cashier: true, payments: true }, orderBy: { createdAt: "desc" } }),
+    prisma.sale.findMany({ where: { status: { in: ["COMPLETED", "PARTIALLY_REFUNDED", "REFUNDED"] }, ...(req.user?.permissions.includes("sales.view_all") ? {} : { cashierId: req.user?.id }) }, include: { items: { include: { product: { include: { category: true } } } }, cashier: true, payments: true, refunds: { include: { items: true } } }, orderBy: { createdAt: "desc" } }),
     prisma.product.findMany({ where: { status: "ACTIVE" }, include: { category: true } }),
     prisma.customer.count(),
     prisma.supplier.count(),
@@ -226,16 +250,17 @@ export const dashboard = asyncHandler(async (req: Request, res: Response) => {
     prisma.supplierDelivery.count({ where: { completedAt: null } }),
     prisma.stockMovement.findMany({ include: { product: true, employee: true }, orderBy: { createdAt: "desc" }, take: 10 })
   ]);
-  const sumSales = (from: Date) => sales.filter((sale) => sale.createdAt >= from).reduce((sum, sale) => sum.add(sale.total), new Prisma.Decimal(0));
+  const sumSales = (from: Date) => sales.filter((sale) => sale.createdAt >= from).reduce((sum, sale) => sum.add(saleTotals(sale).netSales), new Prisma.Decimal(0));
   const inventoryValue = products.reduce((sum, product) => sum.add(product.costPrice.mul(product.currentStock)), new Prisma.Decimal(0));
-  const grossProfit = sales.reduce((sum, sale) => sum.add(sale.grossProfit), new Prisma.Decimal(0));
+  const grossProfit = sales.reduce((sum, sale) => sum.add(saleTotals(sale).profit), new Prisma.Decimal(0));
   const lowStock = products.filter((product) => product.currentStock <= product.reorderLevel);
   const salesByCategory = new Map<string, Prisma.Decimal>();
   const productSales = new Map<string, { id: string; name: string; sku: string; quantitySold: number; revenue: Prisma.Decimal }>();
   for (const sale of sales) {
     for (const item of sale.items) {
+      const line = saleLineTotals(sale, item);
       const name = item.product.category.name;
-      salesByCategory.set(name, (salesByCategory.get(name) ?? new Prisma.Decimal(0)).add(item.lineTotal));
+      salesByCategory.set(name, (salesByCategory.get(name) ?? new Prisma.Decimal(0)).add(line.netSales));
       const current = productSales.get(item.productId) ?? {
         id: item.productId,
         name: item.product.name,
@@ -243,8 +268,8 @@ export const dashboard = asyncHandler(async (req: Request, res: Response) => {
         quantitySold: 0,
         revenue: new Prisma.Decimal(0)
       };
-      current.quantitySold += item.quantity;
-      current.revenue = current.revenue.add(item.lineTotal);
+      current.quantitySold += line.itemsSold;
+      current.revenue = current.revenue.add(line.netSales);
       productSales.set(item.productId, current);
     }
   }
@@ -254,13 +279,13 @@ export const dashboard = asyncHandler(async (req: Request, res: Response) => {
     .map((product) => ({ ...product, revenue: Number(product.revenue) }));
   const dailySales = Array.from({ length: 14 }).map((_, index) => {
     const date = new Date(today);
-    date.setDate(today.getDate() - (13 - index));
+    date.setUTCDate(today.getUTCDate() - (13 - index));
     const next = new Date(date);
-    next.setDate(date.getDate() + 1);
+    next.setUTCDate(date.getUTCDate() + 1);
     return {
-      date: date.toISOString().slice(0, 10),
-      sales: sales.filter((sale) => sale.createdAt >= date && sale.createdAt < next).reduce((sum, sale) => sum + Number(sale.total), 0),
-      profit: sales.filter((sale) => sale.createdAt >= date && sale.createdAt < next).reduce((sum, sale) => sum + Number(sale.grossProfit), 0)
+      date: businessDateKey(date),
+      sales: sales.filter((sale) => sale.createdAt >= date && sale.createdAt < next).reduce((sum, sale) => sum + saleTotals(sale).netSales, 0),
+      profit: sales.filter((sale) => sale.createdAt >= date && sale.createdAt < next).reduce((sum, sale) => sum + saleTotals(sale).profit, 0)
     };
   });
   return ok(res, "Dashboard loaded", serializeForPermissions({
@@ -268,8 +293,8 @@ export const dashboard = asyncHandler(async (req: Request, res: Response) => {
       todaySales: sumSales(today),
       monthlySales: sumSales(startMonth),
       yearlySales: sumSales(startYear),
-      grossSales: sales.reduce((sum, sale) => sum.add(sale.subtotal), new Prisma.Decimal(0)),
-      netSales: sales.reduce((sum, sale) => sum.add(sale.total), new Prisma.Decimal(0)),
+      grossSales: sales.reduce((sum, sale) => sum.add(saleTotals(sale).grossSales), new Prisma.Decimal(0)),
+      netSales: sales.reduce((sum, sale) => sum.add(saleTotals(sale).netSales), new Prisma.Decimal(0)),
       grossProfit,
       totalProducts: products.length,
       totalCustomers: customers,
@@ -283,7 +308,7 @@ export const dashboard = asyncHandler(async (req: Request, res: Response) => {
     charts: {
       dailySales,
       salesByCategory: Array.from(salesByCategory.entries()).map(([name, value]) => ({ name, value: Number(value) })),
-      paymentMethods: Object.values(RoleName).map((name) => ({ name, value: 0 }))
+      paymentMethods: [...new Set(sales.map((sale) => sale.paymentMethod))].map((name) => ({ name, value: sales.filter((sale) => sale.paymentMethod === name).reduce((sum, sale) => sum + saleTotals(sale).netSales, 0) }))
     },
     tables: {
       recentTransactions: sales.slice(0, 10),
@@ -296,25 +321,15 @@ export const dashboard = asyncHandler(async (req: Request, res: Response) => {
 });
 
 export const report = asyncHandler(async (req: Request, res: Response) => {
-  const sales = await prisma.sale.findMany({ include: { items: { include: { product: { include: { category: true } } } }, payments: true, cashier: true }, orderBy: { createdAt: "desc" } });
-  const grossSales = sales.reduce((sum, sale) => sum.add(sale.subtotal), new Prisma.Decimal(0));
-  const netSales = sales.reduce((sum, sale) => sum.add(sale.total), new Prisma.Decimal(0));
-  const profit = sales.reduce((sum, sale) => sum.add(sale.grossProfit), new Prisma.Decimal(0));
-  if (req.params.type === "profit" && !req.user?.permissions.includes("reports.profit")) {
-    throw new AppError("You do not have permission to perform this action.", 403);
-  }
-  const itemsSold = sales.flatMap((sale) => sale.items).reduce((sum, item) => sum + item.quantity, 0);
-  return ok(res, "Report loaded", serializeForPermissions({
-    report: req.params.type ?? "summary",
-    generatedAt: new Date(),
-    transactionCount: sales.length,
-    itemsSold,
-    grossSales,
-    netSales,
-    profit,
-    averageTransactionValue: sales.length ? netSales.div(sales.length) : new Prisma.Decimal(0),
-    rows: sales.slice(0, 100)
-  }, req.user?.permissions ?? []));
+  const reportPermissions: Record<string, string> = {
+    "daily-sales": "reports.daily", "monthly-sales": "reports.monthly", "yearly-sales": "reports.yearly",
+    products: "reports.products", categories: "reports.categories", payments: "reports.payments", employees: "reports.employees",
+    profit: "reports.profit", "inventory-value": "reports.inventory_value", "supplier-performance": "reports.supplier_performance", forecast: "reports.forecast"
+  };
+  const permission = reportPermissions[req.params.type];
+  if (!permission) throw new AppError("Report not found", 404);
+  if (!req.user?.permissions.includes(permission)) throw new AppError("You do not have permission to view this report.", 403);
+  return ok(res, "Report loaded", serializeForPermissions(await buildReport(req.params.type ?? "daily-sales", req.query, req.user?.fullName ?? "System User"), req.user?.permissions ?? []));
 });
 
 export const supplierPerformance = asyncHandler(async (req: Request, res: Response) => {

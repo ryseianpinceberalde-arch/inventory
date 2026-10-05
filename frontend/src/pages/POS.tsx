@@ -1,6 +1,6 @@
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AxiosError } from "axios";
-import { Camera, Pause, Printer, Search, Trash2, X } from "lucide-react";
+import { Camera, Pause, Printer, Search, Trash2, Wallet, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import { useNavigate, useSearchParams } from "react-router-dom";
@@ -8,7 +8,10 @@ import { CameraBarcodeScanner } from "../components/barcode/CameraBarcodeScanner
 import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";
 import { Input } from "../components/ui/Input";
-import { api, getData } from "../services/api";
+import { Modal } from "../components/ui/Modal";
+import { QueryState } from "../components/ui/QueryState";
+import { useAuth } from "../contexts/AuthContext";
+import { api, getData, getAllProducts } from "../services/api";
 import type { ApiResponse, BarcodeLookupResult, ExternalProductDraft, Product, Sale } from "../types/api";
 import { peso } from "../lib/format";
 
@@ -18,9 +21,40 @@ interface CartLine {
   productDiscount: number;
 }
 
+interface HeldSale {
+  id: string;
+  notes?: string | null;
+  createdAt: string;
+  items: Array<{ id: string; quantity: number; discount: string; product: Product }>;
+}
+
+interface PayMongoCheckout {
+  id: string;
+  checkoutUrl: string;
+  referenceNumber: string;
+  amount: number;
+}
+
+interface PayMongoCheckoutStatus {
+  id: string;
+  status: string;
+  paid: boolean;
+}
+
+interface PendingPayMongoCheckout {
+  checkoutSessionId: string;
+  amountPaid: string;
+  idempotencyKey: string;
+  cart: CartLine[];
+}
+
 const posCartStorageKey = "smartstock.pos.cart";
+const pendingPayMongoStorageKey = "smartstock.pos.paymongo.pending";
 
 export function POS() {
+  const queryClient = useQueryClient();
+  const { hasPermission } = useAuth();
+  const cashAttempt = useRef<{ signature: string; key: string } | null>(null);
   const [search, setSearch] = useState("");
   const [isCameraOpen, setIsCameraOpen] = useState(false);
   const [unknownBarcode, setUnknownBarcode] = useState("");
@@ -37,13 +71,16 @@ export function POS() {
     }
   });
   const [amountPaid, setAmountPaid] = useState("");
+  const [completedSale, setCompletedSale] = useState<Sale | null>(null);
   const scannerInputRef = useRef<HTMLInputElement>(null);
   const scannerBufferRef = useRef("");
   const lastScannerKeyAtRef = useRef(0);
   const activeLookupRef = useRef("");
+  const processingPayMongoReturnRef = useRef(false);
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const { data: products = [] } = useQuery({ queryKey: ["products-pos"], queryFn: () => getData<Product[]>("/products?limit=100") });
+  const { data: products = [], isLoading: productsLoading, isError: productsError, refetch: refetchProducts } = useQuery({ queryKey: ["products-pos"], queryFn: () => getAllProducts<Product>() });
+  const { data: heldSales = [] } = useQuery({ queryKey: ["held-sales"], queryFn: () => getData<HeldSale[]>("/held-sales"), enabled: hasPermission("sales.resume") });
   const filteredProducts = useMemo(() => {
     const term = search.trim().toLowerCase();
     if (!term) return products;
@@ -72,19 +109,90 @@ export function POS() {
   }
 
   const saleMutation = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (input: { paymentMethod: "CASH" | "GCASH"; amountPaid: string; idempotencyKey: string; checkoutSessionId?: string; items: CartLine[] }) => {
+      const total = input.items.reduce((sum, line) => sum + Number(line.product.sellingPrice) * line.quantity - line.productDiscount, 0);
+      if (Number(input.amountPaid || 0) < total) throw new Error("Amount paid is below total");
       const response = await api.post<ApiResponse<Sale>>("/sales", {
         receiptNo: `RCP-${Date.now()}`,
-        paymentMethod: "CASH",
-        amountPaid,
+        paymentMethod: input.paymentMethod,
+        amountPaid: input.amountPaid,
         transactionDiscount: "0",
-        idempotencyKey: crypto.randomUUID(),
+        idempotencyKey: input.idempotencyKey,
+        checkoutSessionId: input.checkoutSessionId,
+        items: input.items.map((line) => ({ productId: line.product.id, quantity: line.quantity, productDiscount: String(line.productDiscount) }))
+      });
+      return response.data.data;
+    },
+    onSuccess: async (sale) => {
+      toast.success("Sale completed");
+      cashAttempt.current = null;
+      setCompletedSale(sale);
+      setCart([]);
+      setAmountPaid("");
+      sessionStorage.removeItem(posCartStorageKey);
+      sessionStorage.removeItem(pendingPayMongoStorageKey);
+      await queryClient.invalidateQueries({ queryKey: ["products-pos"] });
+      await queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+    },
+    onError: (error) => {
+      const message = error instanceof AxiosError ? error.response?.data?.message : error instanceof Error ? error.message : undefined;
+      toast.error(message ?? "Sale failed");
+    }
+  });
+
+  const payMongoMutation = useMutation({
+    mutationFn: async () => {
+      const response = await api.post<ApiResponse<PayMongoCheckout>>("/paymongo/gcash-checkout", {
+        successUrl: `${window.location.origin}/pos?paymongoResult=success`,
+        cancelUrl: `${window.location.origin}/pos?paymongoResult=cancelled`,
         items: cart.map((line) => ({ productId: line.product.id, quantity: line.quantity, productDiscount: String(line.productDiscount) }))
       });
       return response.data.data;
     },
-    onSuccess: () => { toast.success("Sale completed"); setCart([]); setAmountPaid(""); },
-    onError: () => toast.error("Sale failed")
+    onSuccess: (checkout) => {
+      const pending: PendingPayMongoCheckout = {
+        checkoutSessionId: checkout.id,
+        amountPaid: String(checkout.amount),
+        idempotencyKey: crypto.randomUUID(),
+        cart
+      };
+      sessionStorage.setItem(posCartStorageKey, JSON.stringify(cart));
+      sessionStorage.setItem(pendingPayMongoStorageKey, JSON.stringify(pending));
+      window.location.assign(checkout.checkoutUrl);
+    },
+    onError: (error) => {
+      const message = error instanceof AxiosError ? error.response?.data?.message : undefined;
+      toast.error(message ?? "Could not start GCash checkout");
+    }
+  });
+
+  const holdMutation = useMutation({
+    mutationFn: async () => api.post("/held-sales", {
+      notes: `Held from POS at ${new Date().toLocaleString()}`,
+      items: cart.map((line) => ({ productId: line.product.id, quantity: line.quantity, productDiscount: String(line.productDiscount) }))
+    }),
+    onSuccess: async () => {
+      toast.success("Order held");
+      setCart([]);
+      setAmountPaid("");
+      sessionStorage.removeItem(posCartStorageKey);
+      await queryClient.invalidateQueries({ queryKey: ["held-sales"] });
+    },
+    onError: (error) => {
+      const message = error instanceof AxiosError ? error.response?.data?.message : undefined;
+      toast.error(message ?? "Could not hold order");
+    }
+  });
+
+  const removeHeldMutation = useMutation({
+    mutationFn: async (id: string) => api.delete(`/held-sales/${id}`),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["held-sales"] });
+    },
+    onError: (error) => {
+      const message = error instanceof AxiosError ? error.response?.data?.message : undefined;
+      toast.error(message ?? "Could not update held order");
+    }
   });
 
   const scan = useCallback(async (barcodeValue = search) => {
@@ -166,6 +274,27 @@ export function POS() {
     navigate(`/products?${params.toString()}`);
   }
 
+  async function resumeHeldSale(heldSale: HeldSale) {
+    if (cart.length && !window.confirm("Replace the current cart with this held order?")) return;
+    try {
+      await removeHeldMutation.mutateAsync(heldSale.id);
+      setCart(heldSale.items.map((item) => ({ product: item.product, quantity: item.quantity, productDiscount: Number(item.discount) })));
+      setAmountPaid("");
+      toast.success("Held order resumed");
+    } catch { /* The mutation displays the error and preserves the current cart. */ }
+  }
+
+  function checkoutCash() {
+    const signature = JSON.stringify({ cart, amountPaid });
+    if (cashAttempt.current?.signature !== signature) cashAttempt.current = { signature, key: crypto.randomUUID() };
+    saleMutation.mutate({ paymentMethod: "CASH", amountPaid, idempotencyKey: cashAttempt.current.key, items: cart });
+  }
+
+  function checkoutGcash() {
+    if (cart.length === 0) return;
+    payMongoMutation.mutate();
+  }
+
   const handleCameraScan = useCallback((scannedBarcode: string) => {
     setSearch(scannedBarcode);
     void scan(scannedBarcode);
@@ -214,9 +343,54 @@ export function POS() {
     void scan(barcode);
   }, [scan, searchParams, setSearchParams]);
 
+  useEffect(() => {
+    const result = searchParams.get("paymongoResult");
+    if (!result || processingPayMongoReturnRef.current) return;
+    processingPayMongoReturnRef.current = true;
+
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.delete("paymongoResult");
+    setSearchParams(nextParams, { replace: true });
+
+    if (result === "cancelled") {
+      toast.error("GCash payment was cancelled.");
+      processingPayMongoReturnRef.current = false;
+      return;
+    }
+
+    const stored = sessionStorage.getItem(pendingPayMongoStorageKey);
+    if (!stored) {
+      toast.error("Could not find the pending GCash checkout.");
+      processingPayMongoReturnRef.current = false;
+      return;
+    }
+    const storedCheckout = stored;
+
+    async function verifyPayment() {
+      try {
+        const pending = JSON.parse(storedCheckout) as PendingPayMongoCheckout;
+        const status = await getData<PayMongoCheckoutStatus>(`/paymongo/checkout-sessions/${encodeURIComponent(pending.checkoutSessionId)}`);
+        if (!status.paid) {
+          toast.error("GCash payment is not paid yet.");
+          return;
+        }
+        setCart(pending.cart);
+        saleMutation.mutate({ paymentMethod: "GCASH", amountPaid: pending.amountPaid, idempotencyKey: pending.idempotencyKey, checkoutSessionId: pending.checkoutSessionId, items: pending.cart });
+      } catch (error) {
+        const message = error instanceof AxiosError ? error.response?.data?.message : undefined;
+        toast.error(message ?? "Could not verify GCash payment.");
+      } finally {
+        processingPayMongoReturnRef.current = false;
+      }
+    }
+
+    void verifyPayment();
+  }, [searchParams, setSearchParams, saleMutation]);
+
   return (
-    <div className="grid gap-4 lg:grid-cols-[1fr_460px]">
-      <div className="space-y-4">
+    <fieldset disabled={saleMutation.isPending || payMongoMutation.isPending || holdMutation.isPending} className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_400px]">
+      <div className="min-w-0 space-y-4">
+        {(productsLoading || productsError) && <QueryState loading={productsLoading} error={productsError} onRetry={() => void refetchProducts()} />}
         <Card>
           <div className="mb-3 flex items-center gap-2 text-sm font-semibold"><Search size={18} /> Scan or Search Product</div>
           <div className="flex flex-col gap-3 sm:flex-row">
@@ -250,7 +424,7 @@ export function POS() {
               Last scan: <strong>{lastScan.barcode}</strong>{lastScan.productName ? ` - ${lastScan.productName} added to cart` : ""}
             </div>
           )}
-          {isCameraOpen && <div className="mt-4"><CameraBarcodeScanner continuous onClose={() => setIsCameraOpen(false)} onScan={handleCameraScan} /></div>}
+          {isCameraOpen && <div className="mt-3 max-w-md"><CameraBarcodeScanner compact continuous onClose={() => setIsCameraOpen(false)} onScan={handleCameraScan} /></div>}
         </Card>
         <Card>
           <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -261,14 +435,73 @@ export function POS() {
       <Card className="self-start">
         <div className="flex items-center justify-between gap-3">
           <h1 className="text-xl font-bold">Current Order</h1>
-          <Button type="button" className="h-9 bg-slate-700 px-3 hover:bg-slate-800" disabled={cart.length === 0} onClick={() => setCart([])}><X size={16} /> Clear</Button>
+          <Button type="button" className="h-9 bg-slate-700 px-3 hover:bg-slate-800" disabled={cart.length === 0} onClick={() => { if (window.confirm("Clear all items from this cart?")) setCart([]); }}><X size={16} /> Clear</Button>
         </div>
         <div className="mt-4 space-y-2">
           {cart.length === 0 && <p className="text-sm text-slate-500">No items in cart.</p>}
-          {cart.map((line) => <div key={line.product.id} className="grid grid-cols-[1fr_72px_72px_28px] items-center gap-2 rounded-md border border-line p-3 text-sm"><div><strong className="block">{line.product.name}</strong><span className="text-xs text-slate-500">{line.product.barcode}</span></div><span className="text-right">{peso(line.product.sellingPrice)}</span><Input className="h-8 text-center" min="1" max={line.product.currentStock} type="number" value={line.quantity} onChange={(event) => setCart((rows) => rows.map((row) => row.product.id === line.product.id ? { ...row, quantity: Math.min(line.product.currentStock, Math.max(1, Number(event.target.value || 1))) } : row))} /><button onClick={() => setCart((rows) => rows.filter((row) => row.product.id !== line.product.id))} aria-label={`Remove ${line.product.name}`}><Trash2 size={16} /></button><span className="col-span-4 text-right font-semibold">{peso(Number(line.product.sellingPrice) * line.quantity - line.productDiscount)}</span></div>)}
+          {cart.map((line) => <div key={line.product.id} className="grid grid-cols-[minmax(0,1fr)_64px_64px_24px] items-center gap-2 rounded-md border border-line p-3 text-sm"><div><strong className="block">{line.product.name}</strong><span className="text-xs text-slate-500">{line.product.barcode}</span></div><span className="text-right">{peso(line.product.sellingPrice)}</span><Input className="h-8 text-center" min="1" max={line.product.currentStock} type="number" value={line.quantity} onChange={(event) => setCart((rows) => rows.map((row) => row.product.id === line.product.id ? { ...row, quantity: Math.min(line.product.currentStock, Math.max(1, Number(event.target.value || 1))) } : row))} /><button onClick={() => setCart((rows) => rows.filter((row) => row.product.id !== line.product.id))} aria-label={`Remove ${line.product.name}`}><Trash2 size={16} /></button><span className="col-span-4 text-right font-semibold">{peso(Number(line.product.sellingPrice) * line.quantity - line.productDiscount)}</span></div>)}
         </div>
-        <div className="mt-5 space-y-2 border-t pt-4 text-sm"><div className="flex justify-between"><span>Subtotal</span><strong>{peso(totals.subtotal)}</strong></div><div className="flex justify-between"><span>Discount</span><strong>{peso(0)}</strong></div><div className="flex justify-between text-lg"><span>Grand Total</span><strong>{peso(totals.total)}</strong></div><Input value={amountPaid} onChange={(event) => setAmountPaid(event.target.value)} placeholder="Amount received" /><div className="flex justify-between"><span>Change</span><strong>{peso(totals.change)}</strong></div><div className="grid gap-2 sm:grid-cols-2"><Button type="button" className="bg-slate-700 hover:bg-slate-800" disabled={cart.length === 0} onClick={() => toast("Hold order is not available in the current backend yet.")}><Pause size={18} /> Hold Order</Button><Button disabled={cart.length === 0 || saleMutation.isPending} onClick={() => saleMutation.mutate()}><Printer size={18} /> Checkout / Pay</Button></div></div>
+        {heldSales.length > 0 && (
+          <div className="mt-5 space-y-2 border-t pt-4">
+            <h2 className="text-sm font-semibold">Held Orders</h2>
+            {heldSales.map((heldSale) => (
+              <div key={heldSale.id} className="flex items-center justify-between gap-3 rounded-md border border-line p-3 text-sm dark:border-slate-700">
+                <div>
+                  <div className="font-semibold">{heldSale.items.length} item{heldSale.items.length === 1 ? "" : "s"}</div>
+                  <div className="text-xs text-slate-500">{new Date(heldSale.createdAt).toLocaleString()}</div>
+                </div>
+                <Button type="button" className="h-8 bg-slate-700 px-3 text-xs hover:bg-slate-800" disabled={removeHeldMutation.isPending} onClick={() => resumeHeldSale(heldSale)}>Resume</Button>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="mt-5 space-y-2 border-t pt-4 text-sm"><div className="flex justify-between"><span>Subtotal</span><strong>{peso(totals.subtotal)}</strong></div><div className="flex justify-between"><span>Discount</span><strong>{peso(0)}</strong></div><div className="flex justify-between text-lg"><span>Grand Total</span><strong>{peso(totals.total)}</strong></div><Input value={amountPaid} onChange={(event) => setAmountPaid(event.target.value)} type="number" min="0" step="0.01" placeholder="Amount received for cash" /><div className="flex justify-between"><span>Change</span><strong>{peso(totals.change)}</strong></div><div className="grid gap-2"><Button type="button" className="bg-slate-700 hover:bg-slate-800" disabled={!hasPermission("sales.hold") || cart.length === 0 || holdMutation.isPending} onClick={() => holdMutation.mutate()}><Pause size={18} /> {holdMutation.isPending ? "Holding..." : "Hold Order"}</Button><Button type="button" className="bg-emerald-700 hover:bg-emerald-800" disabled={!hasPermission("payments.process") || !hasPermission("sales.create") || cart.length === 0 || payMongoMutation.isPending || saleMutation.isPending} onClick={checkoutGcash}><Wallet size={18} /> {payMongoMutation.isPending ? "Opening GCash..." : "Pay with GCash"}</Button><Button disabled={!hasPermission("sales.create") || cart.length === 0 || saleMutation.isPending || !Number.isFinite(Number(amountPaid)) || Number(amountPaid || 0) < totals.total} onClick={checkoutCash}><Printer size={18} /> {saleMutation.isPending ? "Processing..." : "Cash Checkout / Pay"}</Button></div></div>
       </Card>
-    </div>
+      {sessionStorage.getItem(pendingPayMongoStorageKey) && <Card><p className="mb-3 text-sm">A GCash checkout is awaiting reconciliation. Verify it before collecting another payment.</p><Button disabled={saleMutation.isPending} onClick={() => { processingPayMongoReturnRef.current = false; setSearchParams({ paymongoResult: "success" }); }}>Verify pending GCash payment</Button></Card>}
+      {completedSale && <ReceiptDialog sale={completedSale} onClose={() => setCompletedSale(null)} />}
+    </fieldset>
+  );
+}
+
+function ReceiptDialog({ sale, onClose }: { sale: Sale; onClose: () => void }) {
+  return (
+    <Modal title="Receipt" onClose={onClose}>
+        <div className="receipt-print rounded-md border border-line bg-white p-4 font-mono text-xs text-slate-950 shadow-sm">
+          <div className="text-center">
+            <div className="text-sm font-bold">SmartStock Demo Store</div>
+            <div>Sales Receipt</div>
+          </div>
+          <div className="my-3 border-t border-dashed border-slate-400" />
+          <div className="space-y-1">
+            <div className="flex justify-between gap-3"><span>Receipt</span><span>{sale.receiptNo}</span></div>
+            <div className="flex justify-between gap-3"><span>Date</span><span>{new Date(sale.createdAt).toLocaleString("en-PH", { timeZone: "Asia/Manila" })}</span></div>
+            <div className="flex justify-between gap-3"><span>Cashier</span><span>{sale.cashier?.fullName ?? "-"}</span></div>
+            <div className="flex justify-between gap-3"><span>Payment</span><span>{sale.paymentMethod}</span></div>
+          </div>
+          <div className="my-3 border-t border-dashed border-slate-400" />
+          <div className="space-y-2">
+            {sale.items.map((item) => (
+              <div key={item.id}>
+                <div className="font-semibold">{item.product.name}</div>
+                <div className="flex justify-between gap-3">
+                  <span>{item.quantity} x {peso(item.sellingPrice)}</span>
+                  <span>{peso(item.lineTotal)}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="my-3 border-t border-dashed border-slate-400" />
+          <div className="space-y-1">
+            <div className="flex justify-between gap-3 text-sm font-bold"><span>Total</span><span>{peso(sale.total)}</span></div>
+            <div className="flex justify-between gap-3"><span>Amount paid</span><span>{peso(sale.amountPaid)}</span></div>
+            <div className="flex justify-between gap-3"><span>Change</span><span>{peso(sale.change)}</span></div>
+          </div>
+          <div className="mt-4 text-center">Thank you</div>
+        </div>
+        <div className="mt-4 grid gap-2 sm:grid-cols-2">
+          <Button type="button" className="bg-slate-700 hover:bg-slate-800" onClick={onClose}>Close</Button>
+          <Button type="button" onClick={() => window.print()}><Printer size={16} /> Print Receipt</Button>
+        </div>
+    </Modal>
   );
 }

@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { BarChart, Bar, CartesianGrid, Line, LineChart, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { KeyboardEvent, ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { QueryState } from "../components/ui/QueryState";
 import { Card } from "../components/ui/Card";
 import { getData } from "../services/api";
 import { peso } from "../lib/format";
@@ -33,20 +34,20 @@ const summaryRoutes: Record<string, { to: string; permissions: string[] }> = {
 };
 
 const summaryCardColors: Record<string, string> = {
-  todaySales: "!border-teal-300 !bg-teal-200 dark:!border-teal-700 dark:!bg-teal-900",
-  monthlySales: "!border-sky-300 !bg-sky-200 dark:!border-sky-700 dark:!bg-sky-900",
-  yearlySales: "!border-purple-300 !bg-purple-200 dark:!border-purple-700 dark:!bg-purple-900",
-  grossSales: "!border-green-300 !bg-green-200 dark:!border-green-700 dark:!bg-green-900",
-  netSales: "!border-blue-300 !bg-blue-200 dark:!border-blue-700 dark:!bg-blue-900",
-  grossProfit: "!border-amber-300 !bg-amber-200 dark:!border-amber-700 dark:!bg-amber-900",
-  totalProducts: "!border-orange-300 !bg-orange-200 dark:!border-orange-700 dark:!bg-orange-900",
-  totalCustomers: "!border-teal-300 !bg-teal-200 dark:!border-teal-700 dark:!bg-teal-900",
-  totalSuppliers: "!border-slate-300 !bg-slate-200 dark:!border-slate-600 dark:!bg-slate-700",
-  totalEmployees: "!border-purple-300 !bg-purple-200 dark:!border-purple-700 dark:!bg-purple-900",
-  inventoryValue: "!border-green-300 !bg-green-200 dark:!border-green-700 dark:!bg-green-900",
-  lowStockProducts: "!border-red-300 !bg-red-200 dark:!border-red-700 dark:!bg-red-900",
-  outOfStockProducts: "!border-red-300 !bg-red-200 dark:!border-red-700 dark:!bg-red-900",
-  pendingSupplierDeliveries: "!border-amber-300 !bg-amber-200 dark:!border-amber-700 dark:!bg-amber-900"
+  todaySales: "!border-teal-300 !bg-teal-50 dark:!border-teal-700 dark:!bg-teal-900",
+  monthlySales: "!border-sky-300 !bg-sky-50 dark:!border-sky-700 dark:!bg-sky-900",
+  yearlySales: "!border-purple-300 !bg-purple-50 dark:!border-purple-700 dark:!bg-purple-900",
+  grossSales: "!border-green-300 !bg-green-50 dark:!border-green-700 dark:!bg-green-900",
+  netSales: "!border-blue-300 !bg-blue-50 dark:!border-blue-700 dark:!bg-blue-900",
+  grossProfit: "!border-amber-300 !bg-amber-50 dark:!border-amber-700 dark:!bg-amber-900",
+  totalProducts: "!border-orange-300 !bg-orange-50 dark:!border-orange-700 dark:!bg-orange-900",
+  totalCustomers: "!border-teal-300 !bg-teal-50 dark:!border-teal-700 dark:!bg-teal-900",
+  totalSuppliers: "!border-slate-300 !bg-slate-50 dark:!border-slate-600 dark:!bg-slate-700",
+  totalEmployees: "!border-purple-300 !bg-purple-50 dark:!border-purple-700 dark:!bg-purple-900",
+  inventoryValue: "!border-green-300 !bg-green-50 dark:!border-green-700 dark:!bg-green-900",
+  lowStockProducts: "!border-red-300 !bg-red-50 dark:!border-red-700 dark:!bg-red-900",
+  outOfStockProducts: "!border-red-300 !bg-red-50 dark:!border-red-700 dark:!bg-red-900",
+  pendingSupplierDeliveries: "!border-amber-300 !bg-amber-50 dark:!border-amber-700 dark:!bg-amber-900"
 };
 
 function labelForSummaryKey(key: string) {
@@ -82,19 +83,21 @@ function DashboardSummaryCard({ children, to, label, colorClass }: { children: R
 }
 
 export function Dashboard() {
-  const { data, isLoading } = useQuery({ queryKey: ["dashboard"], queryFn: () => getData<DashboardData>("/dashboard") });
+  const { data, isLoading, isError, refetch } = useQuery({ queryKey: ["dashboard"], queryFn: () => getData<DashboardData>("/dashboard") });
   const { hasAnyPermission } = useAuth();
+  if (isError) return <QueryState error onRetry={() => void refetch()} />;
   if (isLoading || !data) return <div className="grid gap-4 md:grid-cols-4">{Array.from({ length: 8 }).map((_, i) => <Card key={i} className="h-28 animate-pulse" />)}</div>;
   const summary = data.summary;
   const bestSellingProducts = data.tables.bestSellingProducts.slice(0, 3);
   return (
     <div className="space-y-6">
+      <div><p className="text-xs font-semibold uppercase tracking-widest text-brand dark:text-teal-300">Store overview</p><h1 className="mt-1 text-2xl font-bold">Dashboard</h1><p className="mt-1 text-sm text-slate-500">Sales activity and inventory at a glance.</p></div>
       <div className="dashboard-grid grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {Object.entries(summary).slice(0, 12).map(([key, value]) => {
+        {Object.entries(summary).map(([key, value]) => {
           const route = summaryRoutes[key];
           const label = labelForSummaryKey(key);
           const to = route && hasAnyPermission(route.permissions) ? route.to : undefined;
-          const colorClass = summaryCardColors[key] ?? "!border-slate-300 !bg-slate-200 dark:!border-slate-600 dark:!bg-slate-700";
+          const colorClass = summaryCardColors[key] ?? "!border-slate-300 !bg-slate-50 dark:!border-slate-600 dark:!bg-slate-700";
           return (
             <DashboardSummaryCard key={key} to={to} label={label} colorClass={colorClass}>
               <div className="text-xs font-semibold uppercase text-slate-700 dark:text-slate-200">{label}</div>
@@ -102,7 +105,7 @@ export function Dashboard() {
             </DashboardSummaryCard>
           );
         })}
-        <Card className="dashboard-card-zoom !border-indigo-300 !bg-indigo-200 dark:!border-indigo-700 dark:!bg-indigo-900 sm:col-span-2 lg:col-span-2">
+        <Card className="dashboard-card-zoom !border-indigo-300 !bg-indigo-50 dark:!border-indigo-700 dark:!bg-indigo-900 sm:col-span-2 lg:col-span-2">
           <div className="text-xs font-semibold uppercase text-slate-700 dark:text-slate-200">Top 3 best sale products</div>
           {bestSellingProducts.length > 0 ? (
             <div className="mt-3 space-y-3">
@@ -125,11 +128,11 @@ export function Dashboard() {
         </Card>
       </div>
       <div className="grid gap-4 lg:grid-cols-2">
-        <Card><h2 className="mb-4 font-semibold">Revenue versus profit</h2><ResponsiveContainer width="100%" height={280}><LineChart data={data.charts.dailySales}><CartesianGrid strokeDasharray="3 3" /><XAxis dataKey="date" /><YAxis /><Tooltip /><Line dataKey="sales" stroke="#0f766e" /><Line dataKey="profit" stroke="#c2410c" /></LineChart></ResponsiveContainer></Card>
+        <Card><h2 className="mb-4 font-semibold">Revenue versus profit</h2><ResponsiveContainer width="100%" height={280}><LineChart data={data.charts.dailySales}><CartesianGrid strokeDasharray="3 3" /><XAxis dataKey="date" /><YAxis /><Tooltip /><Line dataKey="sales" stroke="#0f766e" />{hasAnyPermission(["reports.profit"]) && <Line dataKey="profit" stroke="#c2410c" />}</LineChart></ResponsiveContainer></Card>
         <Card><h2 className="mb-4 font-semibold">Sales by category</h2><ResponsiveContainer width="100%" height={280}><PieChart><Pie dataKey="value" data={data.charts.salesByCategory} fill="#0f766e" label /></PieChart></ResponsiveContainer></Card>
       </div>
       <div className="grid gap-4 lg:grid-cols-2">
-        <Card><h2 className="mb-4 font-semibold">Recent transactions</h2>{data.tables.recentTransactions.map((sale) => <div className="flex justify-between border-t py-2 text-sm" key={sale.id}><span>{sale.receiptNo}</span><strong>{peso(sale.total)}</strong></div>)}</Card>
+        <Card><h2 className="mb-4 font-semibold">Recent transactions</h2>{data.tables.recentTransactions.length === 0 && <p className="text-sm text-slate-500">No completed transactions yet.</p>}{data.tables.recentTransactions.map((sale) => <div className="flex justify-between border-t py-2 text-sm" key={sale.id}><span>{sale.receiptNo}</span><strong>{peso(sale.total)}</strong></div>)}</Card>
         <Card><h2 className="mb-4 font-semibold">Low-stock products</h2><ResponsiveContainer width="100%" height={240}><BarChart data={data.tables.lowStockProducts}><XAxis dataKey="name" /><YAxis /><Tooltip /><Bar dataKey="currentStock" fill="#c2410c" /></BarChart></ResponsiveContainer></Card>
       </div>
     </div>

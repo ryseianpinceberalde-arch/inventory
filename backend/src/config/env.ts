@@ -1,7 +1,8 @@
 import dotenv from "dotenv";
+import { fileURLToPath } from "node:url";
 import { z } from "zod";
 
-dotenv.config();
+dotenv.config({ path: fileURLToPath(new URL("../../.env", import.meta.url)) });
 
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
@@ -14,7 +15,9 @@ const envSchema = z.object({
   CLIENT_URL: z.string().url().default("http://localhost:5173"),
   UPLOAD_DIRECTORY: z.string().default("uploads"),
   UPCITEMDB_API_KEY: z.string().optional(),
-  UPCITEMDB_KEY_TYPE: z.string().default("3scale")
+  UPCITEMDB_KEY_TYPE: z.string().default("3scale"),
+  PAYMONGO_SECRET_KEY: z.string().optional(),
+  PAYMONGO_PUBLIC_KEY: z.string().optional()
 });
 
 export const env = envSchema.parse(process.env);
