@@ -7,8 +7,7 @@ import { z } from "zod";
 import { useAuth } from "../contexts/AuthContext";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
-import { AxiosError } from "axios";
-import type { ApiResponse } from "../types/api";
+import { errorMessage } from "../services/api";
 
 const schema = z.object({ email: z.string().email(), password: z.string().min(1) });
 type FormData = z.infer<typeof schema>;
@@ -37,10 +36,7 @@ export function Login() {
       await login(data.email, data.password);
       navigate("/");
     } catch (error) {
-      const message = error instanceof AxiosError
-        ? (error.response?.data as ApiResponse<unknown> | undefined)?.message ?? "Sign in failed"
-        : "Sign in failed";
-      setError("root", { message });
+      setError("root", { message: errorMessage(error, "Sign in failed") });
     }
   }
 
@@ -53,10 +49,7 @@ export function Login() {
       await login(email, password);
       navigate("/");
     } catch (error) {
-      const message = error instanceof AxiosError
-        ? (error.response?.data as ApiResponse<unknown> | undefined)?.message ?? "Demo sign in failed"
-        : "Demo sign in failed";
-      setError("root", { message });
+      setError("root", { message: errorMessage(error, "Demo sign in failed") });
     } finally {
       setDemoSubmitting(false);
     }

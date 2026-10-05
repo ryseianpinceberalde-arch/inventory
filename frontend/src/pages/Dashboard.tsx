@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { BarChart, Bar, CartesianGrid, Line, LineChart, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { BarChart, Bar, CartesianGrid, Cell, Line, LineChart, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { KeyboardEvent, ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { QueryState } from "../components/ui/QueryState";
@@ -17,6 +17,8 @@ interface DashboardData {
     lowStockProducts: Array<{ id: string; name: string; currentStock: number; reorderLevel: number }>;
   };
 }
+
+const categoryColors = ["#0f766e", "#2563eb", "#d97706", "#9333ea", "#e11d48", "#0891b2", "#65a30d", "#c2410c", "#4f46e5", "#475569"];
 
 const summaryRoutes: Record<string, { to: string; permissions: string[] }> = {
   todaySales: { to: "/sales", permissions: ["sales.view_all", "sales.view_own"] },
@@ -129,7 +131,37 @@ export function Dashboard() {
       </div>
       <div className="grid gap-4 lg:grid-cols-2">
         <Card><h2 className="mb-4 font-semibold">Revenue versus profit</h2><ResponsiveContainer width="100%" height={280}><LineChart data={data.charts.dailySales}><CartesianGrid strokeDasharray="3 3" /><XAxis dataKey="date" /><YAxis /><Tooltip /><Line dataKey="sales" stroke="#0f766e" />{hasAnyPermission(["reports.profit"]) && <Line dataKey="profit" stroke="#c2410c" />}</LineChart></ResponsiveContainer></Card>
-        <Card><h2 className="mb-4 font-semibold">Sales by category</h2><ResponsiveContainer width="100%" height={280}><PieChart><Pie dataKey="value" data={data.charts.salesByCategory} fill="#0f766e" label /></PieChart></ResponsiveContainer></Card>
+        <Card>
+          <h2 className="font-semibold">Sales by category</h2>
+          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Net sales in Philippine pesos</p>
+          {data.charts.salesByCategory.some((category) => category.value > 0) ? (
+            <>
+              <ResponsiveContainer width="100%" height={240}>
+                <PieChart>
+                  <Pie dataKey="value" nameKey="name" data={data.charts.salesByCategory} outerRadius={100}>
+                    {data.charts.salesByCategory.map((category, index) => (
+                      <Cell key={category.name} fill={categoryColors[index % categoryColors.length]} />
+                    ))}
+                  </Pie>
+                  <Tooltip formatter={(value) => peso(Number(value))} />
+                </PieChart>
+              </ResponsiveContainer>
+              <ul aria-label="Category sales totals" className="space-y-2 text-sm">
+                {data.charts.salesByCategory.map((category, index) => (
+                  <li key={category.name} className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
+                    <span className="flex min-w-0 items-center gap-2">
+                      <span aria-hidden="true" className="h-3 w-3 shrink-0 rounded-sm" style={{ backgroundColor: categoryColors[index % categoryColors.length] }} />
+                      <span className="break-words [overflow-wrap:anywhere]">{category.name}</span>
+                    </span>
+                    <span className="ml-auto font-semibold tabular-nums">{peso(category.value)}</span>
+                  </li>
+                ))}
+              </ul>
+            </>
+          ) : (
+            <p className="py-8 text-sm text-slate-500 dark:text-slate-400">No category sales available yet.</p>
+          )}
+        </Card>
       </div>
       <div className="grid gap-4 lg:grid-cols-2">
         <Card><h2 className="mb-4 font-semibold">Recent transactions</h2>{data.tables.recentTransactions.length === 0 && <p className="text-sm text-slate-500">No completed transactions yet.</p>}{data.tables.recentTransactions.map((sale) => <div className="flex justify-between border-t py-2 text-sm" key={sale.id}><span>{sale.receiptNo}</span><strong>{peso(sale.total)}</strong></div>)}</Card>

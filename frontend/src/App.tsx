@@ -10,7 +10,7 @@ import { Login } from "./pages/Login";
 import { Notifications } from "./pages/Notifications";
 import { POS } from "./pages/POS";
 import { Profile, SettingsPage } from "./pages/ProfileSettings";
-import { ReportDetail, ReportsIndex } from "./pages/Reports";
+import { ReportDetail, ReportsIndex, ReportsLayout } from "./pages/Reports";
 import { ResourcePage } from "./pages/ResourcePage";
 import { RoleManagement } from "./pages/RoleManagement";
 import { Unauthorized } from "./pages/Unauthorized";
@@ -66,8 +66,10 @@ export function App() {
               <Route path="/sales" element={<PermissionRoute anyPermissions={["sales.view_all", "sales.view_own"]}><Shell><ResourcePage title="Sales" endpoint="/sales" columns={["receiptNo", "customer", "cashier", "total", "paymentMethod", "status", "createdAt"]} /></Shell></PermissionRoute>} />
               <Route path="/sales/:id" element={<PermissionRoute anyPermissions={["sales.view_all", "sales.view_own"]}><Shell><ResourcePage title="Sale detail" endpoint="/sales" columns={["receiptNo", "total", "status"]} /></Shell></PermissionRoute>} />
               <Route path="/refunds" element={<PermissionRoute permission="refunds.view"><Shell><ResourcePage title="Refunds" endpoint="/sales" columns={["receiptNo", "total", "status"]} /></Shell></PermissionRoute>} />
-              <Route path="/reports" element={<PermissionRoute anyPermissions={["reports.daily", "reports.monthly", "reports.yearly", "reports.products", "reports.categories", "reports.payments", "reports.employees", "reports.profit", "reports.inventory_value", "reports.supplier_performance", "reports.forecast"]}><Shell><ReportsIndex /></Shell></PermissionRoute>} />
-              <Route path="/reports/:type" element={<PermissionRoute anyPermissions={["reports.daily", "reports.monthly", "reports.yearly", "reports.products", "reports.categories", "reports.payments", "reports.employees", "reports.profit", "reports.inventory_value", "reports.supplier_performance", "reports.forecast"]}><Shell><ReportDetail /></Shell></PermissionRoute>} />
+              <Route path="/reports" element={<PermissionRoute anyPermissions={["reports.daily", "reports.monthly", "reports.yearly", "reports.products", "reports.categories", "reports.payments", "reports.employees", "reports.profit", "reports.inventory_value", "reports.supplier_performance", "reports.forecast"]}><Shell><ReportsLayout /></Shell></PermissionRoute>}>
+                <Route index element={<ReportsIndex />} />
+                <Route path=":type" element={<ReportDetail />} />
+              </Route>
               <Route path="/notifications" element={<PermissionRoute permission="notifications.view"><Shell><Notifications /></Shell></PermissionRoute>} />
               <Route path="/audit-logs" element={<PermissionRoute permission="audit_logs.view"><Shell><ResourcePage title="Audit logs" endpoint="/audit-logs" columns={["action", "module", "recordId", "user", "createdAt"]} /></Shell></PermissionRoute>} />
               <Route path="/profile" element={<Shell><Profile /></Shell>} />

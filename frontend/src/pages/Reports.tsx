@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Download, FileSpreadsheet, FileText } from "lucide-react";
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import { Navigate, NavLink, Outlet, useParams, useSearchParams } from "react-router-dom";
 import { useEffect, useState } from "react";
 import toast from "react-hot-toast";
 import { Button } from "../components/ui/Button";
@@ -34,21 +34,34 @@ function reportPermission(slug: string) {
 
 export function ReportsIndex() {
   const { hasPermission } = useAuth();
+  const [searchParams] = useSearchParams();
+  const firstReport = reports.find((report) => hasPermission(reportPermission(report.slug)));
+  return firstReport
+    ? <Navigate to={{ pathname: `/reports/${firstReport.slug}`, search: searchParams.toString() }} replace />
+    : <QueryState empty="You do not have permission to view reports." />;
+}
+
+export function ReportsLayout() {
+  const { hasPermission } = useAuth();
+  const { type } = useParams();
   return (
-    <div className="space-y-4">
-      <div>
+    <div className="flex h-[calc(100dvh-6rem)] min-h-0 flex-col gap-4 sm:h-[calc(100dvh-7rem)] lg:h-[calc(100dvh-8rem)]">
+      <div className="shrink-0">
         <h1 className="text-2xl font-bold">Reports</h1>
         <p className="text-sm text-slate-500">Sales, profit, inventory, supplier, payment, and forecast reports.</p>
       </div>
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-        {reports.filter((report) => hasPermission(reportPermission(report.slug))).map((report) => (
-          <Link key={report.slug} to={`/reports/${report.slug}`}>
-            <Card className="h-full transition hover:border-brand">
-              <h2 className="font-bold">{report.title}</h2>
-              <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">{report.description}</p>
-            </Card>
-          </Link>
-        ))}
+      <div className="flex min-h-0 flex-1 flex-col gap-4 md:flex-row">
+        <nav aria-label="Reports" className="max-h-40 shrink-0 space-y-1 overflow-y-auto overscroll-contain rounded-xl border border-line bg-white p-2 shadow-soft dark:border-slate-700 dark:bg-slate-900 md:max-h-none md:w-56 xl:w-64">
+          {reports.filter((report) => hasPermission(reportPermission(report.slug))).map((report) => (
+            <NavLink key={report.slug} to={`/reports/${report.slug}`} className={({ isActive }) => `block rounded-lg p-3 transition-colors ${isActive ? "bg-teal-50 text-brand dark:bg-teal-950 dark:text-teal-100" : "text-slate-600 hover:bg-teal-50 hover:text-brand dark:text-slate-300 dark:hover:bg-teal-950 dark:hover:text-teal-100"}`}>
+              <span className="block text-sm font-semibold">{report.title}</span>
+              <span className="mt-1 hidden text-xs text-slate-500 dark:text-slate-400 md:block">{report.description}</span>
+            </NavLink>
+          ))}
+        </nav>
+        <section key={type} aria-label="Report view" tabIndex={0} className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain rounded-xl border border-line bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-950 sm:p-4">
+          <Outlet />
+        </section>
       </div>
     </div>
   );
@@ -97,9 +110,9 @@ export function ReportDetail() {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold">{reportMeta?.title ?? data.report}</h1>
+          <h2 className="text-2xl font-bold">{reportMeta?.title ?? data.report}</h2>
           <p className="text-sm text-slate-500">{reportMeta?.description}</p>
         </div>
         {hasPermission("reports.export") && <div className="flex flex-wrap gap-2">
