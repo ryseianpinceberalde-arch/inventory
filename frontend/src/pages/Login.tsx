@@ -14,15 +14,13 @@ const schema = z.object({ email: z.string().email(), password: z.string().min(1)
 type FormData = z.infer<typeof schema>;
 type DemoAccount = { label: string; email?: string; password?: string };
 
-const demoAccounts: DemoAccount[] = import.meta.env.DEV
-  ? [
-      { label: "Admin", email: import.meta.env.VITE_DEMO_ADMIN_EMAIL || import.meta.env.VITE_DEMO_EMAIL, password: import.meta.env.VITE_DEMO_ADMIN_PASSWORD || import.meta.env.VITE_DEMO_PASSWORD },
-      { label: "Manager", email: import.meta.env.VITE_DEMO_MANAGER_EMAIL, password: import.meta.env.VITE_DEMO_MANAGER_PASSWORD },
-      { label: "Cashier One", email: import.meta.env.VITE_DEMO_CASHIER_EMAIL, password: import.meta.env.VITE_DEMO_CASHIER_PASSWORD },
-      { label: "Cashier Two", email: import.meta.env.VITE_DEMO_CASHIER2_EMAIL, password: import.meta.env.VITE_DEMO_CASHIER2_PASSWORD },
-      { label: "Inventory Staff", email: import.meta.env.VITE_DEMO_INVENTORY_EMAIL, password: import.meta.env.VITE_DEMO_INVENTORY_PASSWORD }
-    ].filter((account): account is DemoAccount & { email: string; password: string } => Boolean(account.email && account.password))
-  : [];
+const demoAccounts: DemoAccount[] = [
+  { label: "Admin", email: import.meta.env.VITE_DEMO_ADMIN_EMAIL || import.meta.env.VITE_DEMO_EMAIL, password: import.meta.env.VITE_DEMO_ADMIN_PASSWORD || import.meta.env.VITE_DEMO_PASSWORD },
+  { label: "Manager", email: import.meta.env.VITE_DEMO_MANAGER_EMAIL, password: import.meta.env.VITE_DEMO_MANAGER_PASSWORD },
+  { label: "Cashier One", email: import.meta.env.VITE_DEMO_CASHIER_EMAIL, password: import.meta.env.VITE_DEMO_CASHIER_PASSWORD },
+  { label: "Cashier Two", email: import.meta.env.VITE_DEMO_CASHIER2_EMAIL, password: import.meta.env.VITE_DEMO_CASHIER2_PASSWORD },
+  { label: "Inventory Staff", email: import.meta.env.VITE_DEMO_INVENTORY_EMAIL, password: import.meta.env.VITE_DEMO_INVENTORY_PASSWORD }
+].filter((account): account is DemoAccount & { email: string; password: string } => Boolean(account.email && account.password));
 
 export function Login() {
   const { login, user } = useAuth();
