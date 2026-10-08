@@ -12,8 +12,7 @@ const nav = [
   { to: "/products", label: "Products", icon: Package, anyPermissions: ["products.view"] },
   { to: "/products/archive", label: "Archive", icon: Archive, anyPermissions: ["products.view"] },
   { to: "/categories", label: "Categories", icon: Package, anyPermissions: ["categories.view"] },
-  { to: "/inventory/stock-in", label: "Stock-in", icon: Boxes, anyPermissions: ["inventory.stock_in"] },
-  { to: "/inventory/stock-out", label: "Stock-out", icon: Boxes, anyPermissions: ["inventory.stock_out"] },
+  { to: "/inventory/stock", label: "Stock In / Out", icon: Boxes, anyPermissions: ["inventory.stock_in", "inventory.stock_out"] },
   { to: "/inventory/adjustments", label: "Adjustments", icon: ClipboardList, anyPermissions: ["inventory.adjustment_create", "inventory.adjustment_approve"] },
   { to: "/inventory/movements", label: "Stock history", icon: ClipboardList, anyPermissions: ["inventory.movement_view"] },
   { to: "/inventory", label: "Inventory", icon: Boxes, anyPermissions: ["inventory.view"] },
@@ -81,7 +80,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
         <nav className="space-y-1 p-3">
           {[
             { label: "Overview & sales", paths: ["/dashboard", "/pos", "/sales"] },
-            { label: "Stock & catalog", paths: ["/products", "/products/archive", "/categories", "/inventory", "/inventory/stock-in", "/inventory/stock-out", "/inventory/adjustments", "/inventory/movements"] },
+            { label: "Stock & catalog", paths: ["/products", "/products/archive", "/categories", "/inventory", "/inventory/stock", "/inventory/adjustments", "/inventory/movements"] },
             { label: "Business", paths: ["/suppliers", "/supplier-products", "/customers", "/reports"] },
             { label: "Administration", paths: ["/users", "/roles", "/audit-logs", "/settings"] }
           ].map((group) => {

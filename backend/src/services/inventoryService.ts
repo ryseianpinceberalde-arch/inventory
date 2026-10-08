@@ -27,7 +27,7 @@ export async function stockIn(input: {
   deliveryDate: string;
   notes?: string;
   receivedById: string;
-  items: { productId: string; quantity: number; unitCost: string; expirationDate?: string | null; batchNumber?: string }[];
+  items: { productId: string; quantity: number; unitCost: string; sellingPrice?: string; expirationDate?: string | null; batchNumber?: string }[];
 }) {
   return prisma.$transaction(async (tx) => {
     const supplier = await tx.supplier.findUnique({ where: { id: input.supplierId } });
@@ -59,7 +59,7 @@ export async function stockIn(input: {
       const product = await tx.product.findUnique({ where: { id: item.productId } });
       if (!product) throw new AppError("Product not found", 404);
       const newQuantity = product.currentStock + item.quantity;
-      await tx.product.update({ where: { id: item.productId }, data: { currentStock: newQuantity, costPrice: item.unitCost } });
+      await tx.product.update({ where: { id: item.productId }, data: { currentStock: newQuantity, costPrice: item.unitCost, ...(item.sellingPrice === undefined ? {} : { sellingPrice: item.sellingPrice }) } });
       await tx.stockMovement.create({
         data: {
           productId: item.productId,

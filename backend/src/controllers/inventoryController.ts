@@ -11,8 +11,10 @@ import { serializeForPermissions } from "../rbac/serializers.js";
 
 export const stockIn = asyncHandler(async (req: Request, res: Response) => {
   if (!req.user) throw new AppError("Authentication required", 401);
+  const priceUpdates = (req.body.items as { productId: string; sellingPrice?: string }[]).filter((item) => item.sellingPrice !== undefined);
+  if (priceUpdates.length && !req.user.permissions.includes("products.update")) throw new AppError("You do not have permission to update product prices.", 403);
   const receipt = await inventory.stockIn({ ...req.body, receivedById: req.user.id });
-  await audit({ userId: req.user.id, action: "STOCK_IN", module: "INVENTORY", recordId: receipt.id, newData: receipt });
+  await audit({ userId: req.user.id, action: "STOCK_IN", module: "INVENTORY", recordId: receipt.id, newData: priceUpdates.length ? { ...receipt, productSellingPrices: priceUpdates } : receipt });
   return created(res, "Stock-in completed", serializeForPermissions(receipt, req.user.permissions));
 });
 

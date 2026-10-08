@@ -11,16 +11,38 @@ import type { Product } from "../types/api";
 
 const selectClass = "mt-1 h-11 w-full rounded-lg border border-line px-3 text-sm dark:border-slate-700";
 
+export function StockActions({ initialTab }: { initialTab?: "in" | "out" }) {
+  const { hasPermission } = useAuth();
+  const canStockIn = hasPermission("inventory.stock_in");
+  const canStockOut = hasPermission("inventory.stock_out");
+  const [activeTab, setActiveTab] = useState<"in" | "out">(initialTab ?? (canStockIn ? "in" : "out"));
+  const selectedTab = activeTab === "in" && canStockIn || activeTab === "out" && canStockOut
+    ? activeTab
+    : canStockIn ? "in" : "out";
+
+  return <div className="space-y-4">
+    <div role="group" aria-label="Stock actions" className="flex gap-2 border-b border-line dark:border-slate-800">
+      {canStockIn && <button type="button" aria-pressed={selectedTab === "in"} onClick={() => setActiveTab("in")} className={`border-b-2 px-4 py-3 text-sm font-semibold ${selectedTab === "in" ? "border-brand text-brand" : "border-transparent text-slate-500 hover:text-brand"}`}>Stock In</button>}
+      {canStockOut && <button type="button" aria-pressed={selectedTab === "out"} onClick={() => setActiveTab("out")} className={`border-b-2 px-4 py-3 text-sm font-semibold ${selectedTab === "out" ? "border-brand text-brand" : "border-transparent text-slate-500 hover:text-brand"}`}>Stock Out</button>}
+    </div>
+    {selectedTab === "in" ? <StockIn /> : <StockOut />}
+  </div>;
+}
+
 export function StockIn() {
   const [supplierId, setSupplierId] = useState("");
   const [quantity, setQuantity] = useState("1");
   const [unitCost, setUnitCost] = useState("");
+  const [sellingPrice, setSellingPrice] = useState("");
+  const { hasPermission } = useAuth();
+  const canUpdateProduct = hasPermission("products.update");
   const suppliers = useQuery({ queryKey: ["/suppliers"], queryFn: () => getData<Array<{ id: string; name: string; status: string }>>("/suppliers") });
-  return <ActionCard title="Stock-in" onSubmit={async (productId) => { await api.post("/stock-in", { referenceNo: `SIN-${crypto.randomUUID()}`, supplierId, deliveryDate: new Date().toISOString(), items: [{ productId, quantity: Number(quantity), unitCost }] }); }}>
+  return <ActionCard title="Stock-in" onSubmit={async (productId) => { await api.post("/stock-in", { referenceNo: `SIN-${crypto.randomUUID()}`, supplierId, deliveryDate: new Date().toISOString(), items: [{ productId, quantity: Number(quantity), unitCost, ...(canUpdateProduct && sellingPrice.trim() ? { sellingPrice } : {}) }] }); }}>
     {suppliers.isError && <QueryState error onRetry={() => void suppliers.refetch()} />}
     <label className="block text-sm font-medium">Supplier<select required disabled={suppliers.isLoading} className={selectClass} value={supplierId} onChange={(event) => setSupplierId(event.target.value)}><option value="">Select supplier</option>{suppliers.data?.filter((row) => row.status === "ACTIVE").map((row) => <option key={row.id} value={row.id}>{row.name}</option>)}</select></label>
     <label className="block text-sm font-medium">Quantity<Input required className="mt-1" type="number" min="1" step="1" value={quantity} onChange={(event) => setQuantity(event.target.value)} /></label>
     <label className="block text-sm font-medium">Unit cost (PHP)<Input required className="mt-1" type="number" min="0" step="0.01" value={unitCost} onChange={(event) => setUnitCost(event.target.value)} /></label>
+    {canUpdateProduct && <label className="block text-sm font-medium">New selling price (PHP)<Input className="mt-1" type="number" min="0" step="0.01" placeholder="Leave blank to keep current price" value={sellingPrice} onChange={(event) => setSellingPrice(event.target.value)} /></label>}
   </ActionCard>;
 }
 

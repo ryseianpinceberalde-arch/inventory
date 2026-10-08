@@ -10,6 +10,7 @@ export const stockInSchema = z.object({
     productId: z.string().uuid(),
     quantity: z.coerce.number().int().positive(),
     unitCost: money,
+    sellingPrice: money.optional(),
     expirationDate: dateValue.optional().nullable(),
     batchNumber: z.string().optional()
   })).min(1).max(200).refine(uniqueProducts, "Each product must appear only once")

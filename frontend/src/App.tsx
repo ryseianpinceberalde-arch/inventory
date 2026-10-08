@@ -5,7 +5,7 @@ import { AppLayout } from "./components/layout/AppLayout";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
 import { ForgotPassword, ResetPassword } from "./pages/AuthUtility";
 import { Dashboard } from "./pages/Dashboard";
-import { StockIn, StockOut, InventoryAdjustment } from "./pages/InventoryActions";
+import { StockActions, InventoryAdjustment } from "./pages/InventoryActions";
 import { Login } from "./pages/Login";
 import { Notifications } from "./pages/Notifications";
 import { POS } from "./pages/POS";
@@ -48,8 +48,9 @@ export function App() {
               <Route path="/categories" element={<PermissionRoute permission="categories.view"><Shell><ResourcePage title="Categories" endpoint="/categories" columns={["name", "description", "status", "inventoryValue", "totalSales", "totalProfit"]} /></Shell></PermissionRoute>} />
               <Route path="/barcodes" element={<PermissionRoute permission="barcodes.view"><Shell><ResourcePage title="Barcodes" endpoint="/products?limit=100" columns={["name", "barcode", "sku", "currentStock"]} /></Shell></PermissionRoute>} />
               <Route path="/inventory" element={<PermissionRoute permission="inventory.view"><Shell><ResourcePage title="Inventory" endpoint="/products?limit=100" columns={["name", "sku", "currentStock", "reorderLevel", "unit"]} /></Shell></PermissionRoute>} />
-              <Route path="/inventory/stock-in" element={<PermissionRoute permission="inventory.stock_in"><Shell><StockIn /></Shell></PermissionRoute>} />
-              <Route path="/inventory/stock-out" element={<PermissionRoute permission="inventory.stock_out"><Shell><StockOut /></Shell></PermissionRoute>} />
+              <Route path="/inventory/stock" element={<PermissionRoute anyPermissions={["inventory.stock_in", "inventory.stock_out"]}><Shell><StockActions /></Shell></PermissionRoute>} />
+              <Route path="/inventory/stock-in" element={<PermissionRoute permission="inventory.stock_in"><Shell><StockActions initialTab="in" /></Shell></PermissionRoute>} />
+              <Route path="/inventory/stock-out" element={<PermissionRoute permission="inventory.stock_out"><Shell><StockActions initialTab="out" /></Shell></PermissionRoute>} />
               <Route path="/inventory/adjustments" element={<PermissionRoute anyPermissions={["inventory.adjustment_create", "inventory.adjustment_approve"]}><Shell><InventoryAdjustment /></Shell></PermissionRoute>} />
               <Route path="/inventory/movements" element={<PermissionRoute permission="inventory.movement_view"><Shell><ResourcePage title="Stock movements" endpoint="/stock-movements" columns={["referenceNo", "movementType", "product", "quantityChanged", "newQuantity", "createdAt"]} /></Shell></PermissionRoute>} />
               <Route path="/inventory/low-stock" element={<PermissionRoute permission="inventory.view"><Shell><ResourcePage title="Low stock" endpoint="/inventory/low-stock" columns={["name", "sku", "currentStock", "reorderLevel"]} /></Shell></PermissionRoute>} />

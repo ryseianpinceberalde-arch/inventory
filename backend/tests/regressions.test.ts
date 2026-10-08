@@ -13,7 +13,7 @@ process.env.JWT_ACCESS_SECRET = "test-access-secret-for-regressions";
 process.env.JWT_REFRESH_SECRET = "test-refresh-secret-for-regressions";
 process.env.NODE_ENV = "test";
 const { prisma } = await import("../src/config/prisma.js");
-const { requestAdjustment, approveAdjustment } = await import("../src/services/inventoryService.js");
+const { requestAdjustment, approveAdjustment, stockIn } = await import("../src/services/inventoryService.js");
 const { completeSale, processRefund } = await import("../src/services/salesService.js");
 const { findRefreshToken, signRefreshToken } = await import("../src/services/tokenService.js");
 const { notificationScope } = await import("../src/controllers/inventoryController.js");
@@ -35,6 +35,8 @@ test("duplicate product lines and invalid dates/pagination are rejected", () => 
   assert.equal(saleSchema.safeParse({ ...saleInput, items: [item, item] }).success, false);
   assert.equal(refundSchema.safeParse({ saleId: productId, reason: "Returned", refundMethod: "CASH", items: [{ saleItemId: productId, quantity: 1, condition: "Damaged" }, { saleItemId: productId, quantity: 1, condition: "Damaged" }] }).success, false);
   assert.equal(stockInSchema.safeParse({ referenceNo: "TEST", supplierId: actorId, deliveryDate: "nonsense", items: [{ productId, quantity: 1, unitCost: "5" }] }).success, false);
+  assert.equal(stockInSchema.safeParse({ referenceNo: "TEST", supplierId: actorId, deliveryDate: new Date().toISOString(), items: [{ productId, quantity: 1, unitCost: "5", sellingPrice: "8.99" }] }).success, true);
+  assert.equal(stockInSchema.safeParse({ referenceNo: "TEST", supplierId: actorId, deliveryDate: new Date().toISOString(), items: [{ productId, quantity: 1, unitCost: "5", sellingPrice: "8.999" }] }).success, false);
   for (const input of [{ page: "nope" }, { page: -1 }, { limit: 1000 }, { sortBy: "passwordHash" }]) assert.equal(paginationQuery.safeParse(input).success, false);
 });
 
@@ -87,6 +89,22 @@ test("large adjustments wait for approval without altering stock", async () => {
   const transaction = mock.method(prisma, "$transaction", async (fn: (tx: unknown) => unknown) => fn(tx));
   try { assert.equal((await requestAdjustment({ productId, physicalQuantity: 0, reason: "Count correction", requestedById: actorId })).approvalStatus, "PENDING"); }
   finally { transaction.mock.restore(); }
+});
+
+test("stock-in updates supplier cost and an optional product selling price", async () => {
+  const productWrites: unknown[] = [];
+  const tx = {
+    supplier: { findUnique: async () => ({ status: "ACTIVE" }) },
+    stockReceipt: { create: async ({ data }: { data: object }) => ({ id: "receipt", ...data }) },
+    $queryRaw: async () => [],
+    product: { findUnique: async () => product, update: async ({ data }: { data: object }) => { productWrites.push(data); } },
+    stockMovement: { create: async () => ({}) }
+  };
+  const transaction = mock.method(prisma, "$transaction", async (fn: (tx: unknown) => unknown) => fn(tx));
+  try {
+    await stockIn({ referenceNo: "SIN-TEST", supplierId: actorId, deliveryDate: new Date().toISOString(), receivedById: actorId, items: [{ productId, quantity: 3, unitCost: "12.50", sellingPrice: "29.99" }] });
+    assert.deepEqual(productWrites, [{ currentStock: 23, costPrice: "12.50", sellingPrice: "29.99" }]);
+  } finally { transaction.mock.restore(); }
 });
 
 test("stale physical counts cannot overwrite newer stock", async () => {
