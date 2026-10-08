@@ -11,6 +11,18 @@ import type { Product } from "../types/api";
 
 const selectClass = "mt-1 h-11 w-full rounded-lg border border-line px-3 text-sm dark:border-slate-700";
 
+interface StockInLine {
+  id: string;
+  productId: string;
+  quantity: string;
+  unitCost: string;
+  sellingPrice: string;
+}
+
+function emptyStockInLine(): StockInLine {
+  return { id: crypto.randomUUID(), productId: "", quantity: "1", unitCost: "", sellingPrice: "" };
+}
+
 export function StockActions({ initialTab }: { initialTab?: "in" | "out" }) {
   const { hasPermission } = useAuth();
   const canStockIn = hasPermission("inventory.stock_in");
@@ -31,27 +43,86 @@ export function StockActions({ initialTab }: { initialTab?: "in" | "out" }) {
 
 export function StockIn() {
   const [supplierId, setSupplierId] = useState("");
-  const [quantity, setQuantity] = useState("1");
-  const [unitCost, setUnitCost] = useState("");
-  const [sellingPrice, setSellingPrice] = useState("");
+  const [items, setItems] = useState<StockInLine[]>(() => [emptyStockInLine()]);
+  const [error, setError] = useState("");
   const { hasPermission } = useAuth();
   const canUpdateProduct = hasPermission("products.update");
+  const queryClient = useQueryClient();
   const suppliers = useQuery({ queryKey: ["/suppliers"], queryFn: () => getData<Array<{ id: string; name: string; status: string }>>("/suppliers") });
-  return <ActionCard title="Stock-in" onSubmit={async (productId) => { await api.post("/stock-in", { referenceNo: `SIN-${crypto.randomUUID()}`, supplierId, deliveryDate: new Date().toISOString(), items: [{ productId, quantity: Number(quantity), unitCost, ...(canUpdateProduct && sellingPrice.trim() ? { sellingPrice } : {}) }] }); }}>
+  const products = useQuery({ queryKey: ["inventory-products"], queryFn: () => getAllProducts<Product>() });
+  const activeProducts = products.data ?? [];
+  const totalUnits = items.reduce((sum, item) => sum + (Number(item.quantity) || 0), 0);
+  const receiptTotal = items.reduce((sum, item) => sum + (Number(item.quantity) || 0) * (Number(item.unitCost) || 0), 0);
+  const mutation = useMutation({
+    mutationFn: async () => api.post("/stock-in", {
+      referenceNo: `SIN-${crypto.randomUUID()}`,
+      supplierId,
+      deliveryDate: new Date().toISOString(),
+      items: items.map((item) => ({
+        productId: item.productId,
+        quantity: Number(item.quantity),
+        unitCost: item.unitCost,
+        ...(canUpdateProduct && item.sellingPrice.trim() ? { sellingPrice: item.sellingPrice } : {})
+      }))
+    }),
+    onSuccess: async () => {
+      toast.success("Stock-in recorded successfully");
+      setSupplierId("");
+      setItems([emptyStockInLine()]);
+      setError("");
+      await queryClient.invalidateQueries();
+    },
+    onError: (error) => setError(errorMessage(error))
+  });
+
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (mutation.isPending) return;
+    if (new Set(items.map((item) => item.productId)).size !== items.length) {
+      setError("Choose each product only once per receipt.");
+      return;
+    }
+    setError("");
+    mutation.mutate();
+  }
+
+  return <Card className="mx-auto max-w-4xl"><h1 className="text-2xl font-bold">Stock-in</h1><p className="mt-1 text-sm text-slate-500">Record a supplier delivery. Add each received product once; stock and receipt history update together.</p>
     {suppliers.isError && <QueryState error onRetry={() => void suppliers.refetch()} />}
-    <label className="block text-sm font-medium">Supplier<select required disabled={suppliers.isLoading} className={selectClass} value={supplierId} onChange={(event) => setSupplierId(event.target.value)}><option value="">Select supplier</option>{suppliers.data?.filter((row) => row.status === "ACTIVE").map((row) => <option key={row.id} value={row.id}>{row.name}</option>)}</select></label>
-    <label className="block text-sm font-medium">Quantity<Input required className="mt-1" type="number" min="1" step="1" value={quantity} onChange={(event) => setQuantity(event.target.value)} /></label>
-    <label className="block text-sm font-medium">Unit cost (PHP)<Input required className="mt-1" type="number" min="0" step="0.01" value={unitCost} onChange={(event) => setUnitCost(event.target.value)} /></label>
-    {canUpdateProduct && <label className="block text-sm font-medium">New selling price (PHP)<Input className="mt-1" type="number" min="0" step="0.01" placeholder="Leave blank to keep current price" value={sellingPrice} onChange={(event) => setSellingPrice(event.target.value)} /></label>}
-  </ActionCard>;
+    {products.isError && <QueryState error onRetry={() => void products.refetch()} />}
+    {suppliers.data && !suppliers.data.some((row) => row.status === "ACTIVE") && <p className="mt-4 rounded-lg bg-amber-50 p-3 text-sm text-amber-800">Add an active supplier before recording a delivery.</p>}
+    {products.data && activeProducts.length === 0 && <p className="mt-4 rounded-lg bg-amber-50 p-3 text-sm text-amber-800">No active products are available to receive.</p>}
+    <form className="mt-6 space-y-4" onSubmit={submit}><fieldset disabled={mutation.isPending} className="space-y-4">
+      <label className="block text-sm font-medium">Supplier<select required disabled={suppliers.isLoading || suppliers.isError} className={selectClass} value={supplierId} onChange={(event) => setSupplierId(event.target.value)}><option value="">{suppliers.isLoading ? "Loading suppliers..." : "Select supplier"}</option>{suppliers.data?.filter((row) => row.status === "ACTIVE").map((row) => <option key={row.id} value={row.id}>{row.name}</option>)}</select></label>
+      {items.map((item, index) => {
+        const selectedElsewhere = new Set(items.filter((other) => other.id !== item.id).map((other) => other.productId));
+        const choices = activeProducts.filter((product) => product.id === item.productId || !selectedElsewhere.has(product.id));
+        return <div key={item.id} className="space-y-3 rounded-lg border border-line p-4 dark:border-slate-700">
+          <div className="flex items-center justify-between gap-2"><h2 className="text-sm font-semibold">Product {index + 1}</h2>{items.length > 1 && <button type="button" className="text-sm text-red-700 hover:underline" onClick={() => setItems((rows) => rows.filter((row) => row.id !== item.id))}>Remove</button>}</div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="block text-sm font-medium">Product<select required disabled={products.isLoading || products.isError} className={selectClass} value={item.productId} onChange={(event) => setItems((rows) => rows.map((row) => row.id === item.id ? { ...row, productId: event.target.value, unitCost: "", sellingPrice: "" } : row))}><option value="">{products.isLoading ? "Loading products..." : "Select product"}</option>{choices.map((product) => <option key={product.id} value={product.id}>{product.name} — {product.currentStock} {product.unit} in stock</option>)}</select></label>
+            <label className="block text-sm font-medium">Quantity received<Input required className="mt-1" type="number" min="1" step="1" value={item.quantity} onChange={(event) => setItems((rows) => rows.map((row) => row.id === item.id ? { ...row, quantity: event.target.value } : row))} /></label>
+            <label className="block text-sm font-medium">Unit cost (PHP)<Input required className="mt-1" type="number" min="0" step="0.01" value={item.unitCost} onChange={(event) => setItems((rows) => rows.map((row) => row.id === item.id ? { ...row, unitCost: event.target.value } : row))} /></label>
+            {canUpdateProduct && <label className="block text-sm font-medium">New selling price (PHP)<Input className="mt-1" type="number" min="0" step="0.01" placeholder="Leave blank to keep current price" value={item.sellingPrice} onChange={(event) => setItems((rows) => rows.map((row) => row.id === item.id ? { ...row, sellingPrice: event.target.value } : row))} /></label>}
+          </div>
+        </div>;
+      })}
+      <Button type="button" className="bg-slate-700" disabled={products.isLoading || products.isError || items.length >= 200 || items.length >= activeProducts.length} onClick={() => setItems((rows) => [...rows, emptyStockInLine()])}>Add another product</Button>
+      <div className="rounded-lg bg-slate-50 p-3 text-sm dark:bg-slate-900"><div className="flex justify-between"><span>Total units</span><strong>{totalUnits}</strong></div><div className="mt-1 flex justify-between"><span>Estimated receipt total</span><strong>PHP {receiptTotal.toFixed(2)}</strong></div></div>
+      {error && <p role="alert" className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</p>}
+      <Button type="submit" busy={mutation.isPending} disabled={suppliers.isLoading || suppliers.isError || products.isLoading || products.isError || activeProducts.length === 0}>{mutation.isPending ? "Saving..." : "Record stock-in"}</Button>
+    </fieldset></form>
+  </Card>;
 }
 
 export function StockOut() {
   const [quantity, setQuantity] = useState("1");
   const [reason, setReason] = useState("Manual correction");
-  return <ActionCard title="Stock-out" confirm="Remove this quantity from stock?" onSubmit={async (productId) => { await api.post("/stock-out", { referenceNo: `SOUT-${crypto.randomUUID()}`, productId, quantity: Number(quantity), reason }); }}>
-    <label className="block text-sm font-medium">Quantity<Input required className="mt-1" type="number" min="1" step="1" value={quantity} onChange={(event) => setQuantity(event.target.value)} /></label>
-    <label className="block text-sm font-medium">Reason<select className={selectClass} value={reason} onChange={(event) => setReason(event.target.value)}>{["Damaged", "Expired", "Returned to supplier", "Lost", "Internal use", "Product transfer", "Manual correction"].map((item) => <option key={item}>{item}</option>)}</select></label>
+  return <ActionCard title="Stock-out" confirm={(product) => `Remove ${quantity} ${product?.unit ?? "unit(s)"} of ${product?.name ?? "this product"} from stock?`} productsInStockOnly onSuccess={() => { setQuantity("1"); setReason("Manual correction"); }} onSubmit={async (productId) => { await api.post("/stock-out", { referenceNo: `SOUT-${crypto.randomUUID()}`, productId, quantity: Number(quantity), reason }); }}>
+    {(product) => <>
+      <label className="block text-sm font-medium">Quantity<Input required className="mt-1" type="number" min="1" max={product?.currentStock} step="1" value={quantity} onChange={(event) => setQuantity(event.target.value)} /></label>
+      {product && <p className="-mt-3 text-xs text-slate-500">Available stock: {product.currentStock} {product.unit}</p>}
+      <label className="block text-sm font-medium">Reason<select className={selectClass} value={reason} onChange={(event) => setReason(event.target.value)}>{["Damaged", "Expired", "Returned to supplier", "Lost", "Internal use", "Product transfer", "Manual correction"].map((item) => <option key={item}>{item}</option>)}</select></label>
+    </>}
   </ActionCard>;
 }
 
@@ -71,17 +142,20 @@ export function InventoryAdjustment() {
   </div>;
 }
 
-function ActionCard({ title, confirm, children, onSubmit }: { title: string; confirm?: string; children: ReactNode; onSubmit: (id: string) => Promise<void> }) {
+function ActionCard({ title, confirm, children, onSubmit, onSuccess, productsInStockOnly = false }: { title: string; confirm?: string | ((product: Product | undefined) => string); children: ReactNode | ((product: Product | undefined) => ReactNode); onSubmit: (id: string) => Promise<void>; onSuccess?: () => void; productsInStockOnly?: boolean }) {
   const queryClient = useQueryClient();
   const products = useQuery({ queryKey: ["inventory-products"], queryFn: () => getAllProducts<Product>() });
   const [productId, setProductId] = useState("");
   const [error, setError] = useState("");
-  const mutation = useMutation({ mutationFn: () => onSubmit(productId), onSuccess: async () => { toast.success(`${title} recorded successfully`); setProductId(""); setError(""); await queryClient.invalidateQueries(); }, onError: (error) => setError(errorMessage(error)) });
-  function submit(event: FormEvent) { event.preventDefault(); if (mutation.isPending || (confirm && !window.confirm(confirm))) return; setError(""); mutation.mutate(); }
+  const availableProducts = products.data?.filter((product) => !productsInStockOnly || product.currentStock > 0) ?? [];
+  const selectedProduct = availableProducts.find((product) => product.id === productId);
+  const mutation = useMutation({ mutationFn: () => onSubmit(productId), onSuccess: async () => { toast.success(`${title} recorded successfully`); setProductId(""); setError(""); onSuccess?.(); await queryClient.invalidateQueries(); }, onError: (error) => setError(errorMessage(error)) });
+  function submit(event: FormEvent) { event.preventDefault(); const confirmation = typeof confirm === "function" ? confirm(selectedProduct) : confirm; if (mutation.isPending || (confirmation && !window.confirm(confirmation))) return; setError(""); mutation.mutate(); }
   return <Card className="mx-auto max-w-2xl"><h1 className="text-2xl font-bold">{title}</h1><p className="mt-1 text-sm text-slate-500">Record an inventory change and keep the stock history up to date.</p>
     {products.isError && <QueryState error onRetry={() => void products.refetch()} />}
+    {productsInStockOnly && products.data && availableProducts.length === 0 && <p className="mt-4 rounded-lg bg-amber-50 p-3 text-sm text-amber-800">No products currently have stock available to remove.</p>}
     <form className="mt-6 space-y-4" onSubmit={submit}><fieldset disabled={mutation.isPending} className="space-y-4">
-      <label className="block text-sm font-medium">Product<select required className={selectClass} value={productId} disabled={products.isLoading} onChange={(event) => setProductId(event.target.value)}><option value="">{products.isLoading ? "Loading products?" : "Select product"}</option>{products.data?.map((product) => <option key={product.id} value={product.id}>{product.name} ? {product.currentStock} {product.unit} available</option>)}</select></label>{children}
+      <label className="block text-sm font-medium">Product<select required className={selectClass} value={productId} disabled={products.isLoading} onChange={(event) => setProductId(event.target.value)}><option value="">{products.isLoading ? "Loading products..." : "Select product"}</option>{availableProducts.map((product) => <option key={product.id} value={product.id}>{product.name} — {product.currentStock} {product.unit} available</option>)}</select></label>{typeof children === "function" ? children(selectedProduct) : children}
       {error && <p role="alert" className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</p>}
       <Button busy={mutation.isPending} disabled={!productId || products.isError} type="submit">{mutation.isPending ? "Saving?" : `Save ${title.toLowerCase()}`}</Button>
     </fieldset></form></Card>;

@@ -36,6 +36,8 @@ test("duplicate product lines and invalid dates/pagination are rejected", () => 
   assert.equal(refundSchema.safeParse({ saleId: productId, reason: "Returned", refundMethod: "CASH", items: [{ saleItemId: productId, quantity: 1, condition: "Damaged" }, { saleItemId: productId, quantity: 1, condition: "Damaged" }] }).success, false);
   assert.equal(stockInSchema.safeParse({ referenceNo: "TEST", supplierId: actorId, deliveryDate: "nonsense", items: [{ productId, quantity: 1, unitCost: "5" }] }).success, false);
   assert.equal(stockInSchema.safeParse({ referenceNo: "TEST", supplierId: actorId, deliveryDate: new Date().toISOString(), items: [{ productId, quantity: 1, unitCost: "5", sellingPrice: "8.99" }] }).success, true);
+  assert.equal(stockInSchema.safeParse({ referenceNo: "TEST", supplierId: actorId, deliveryDate: new Date().toISOString(), items: [{ productId, quantity: 1, unitCost: "5" }, { productId: actorId, quantity: 2, unitCost: "4.5" }] }).success, true);
+  assert.equal(stockInSchema.safeParse({ referenceNo: "TEST", supplierId: actorId, deliveryDate: new Date().toISOString(), items: [{ productId, quantity: 1, unitCost: "5" }, { productId, quantity: 2, unitCost: "4.5" }] }).success, false);
   assert.equal(stockInSchema.safeParse({ referenceNo: "TEST", supplierId: actorId, deliveryDate: new Date().toISOString(), items: [{ productId, quantity: 1, unitCost: "5", sellingPrice: "8.999" }] }).success, false);
   for (const input of [{ page: "nope" }, { page: -1 }, { limit: 1000 }, { sortBy: "passwordHash" }]) assert.equal(paginationQuery.safeParse(input).success, false);
 });
