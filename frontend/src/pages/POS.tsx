@@ -76,7 +76,8 @@ const pendingPayMongoStorageKey = "smartstock.pos.paymongo.pending";
 const duplicateScanWindowMs = 700;
 
 function memberIdFromQrCode(value: string) {
-  const match = value.trim().match(/^(?:SMARTSTOCK:MEMBER:)?([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i);
+  // PostgreSQL accepts UUID-shaped IDs that do not have RFC 4122 version/variant bits.
+  const match = value.trim().match(/^(?:SMARTSTOCK:MEMBER:)?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i);
   return match?.[1]?.toLowerCase() ?? "";
 }
 
@@ -266,7 +267,32 @@ export function POS() {
     }
   });
 
+  const selectMemberFromQr = useCallback((value: string, fromCamera = false) => {
+    const id = memberIdFromQrCode(value);
+    if (!id && !fromCamera && !value.trim().toUpperCase().startsWith("SMARTSTOCK:")) return;
+    const customer = id
+      ? customers.find((row) => row.id.toLowerCase() === id && row.status === "ACTIVE" && row.customerType === "Member")
+      : undefined;
+    setIsMemberQrOpen(false);
+    setCustomerSearch("");
+    if (!customer) {
+      toast.error("That QR code is not an active SmartStock member card.");
+      return;
+    }
+    setCustomerId(customer.id);
+    setLoyaltyPointsRedeemed(0);
+    toast.success(`${customer.fullName} selected`);
+  }, [customers]);
+
   const scan = useCallback(async (barcodeValue = search) => {
+    const rawBarcode = barcodeValue.trim();
+    if (memberIdFromQrCode(rawBarcode) || rawBarcode.toUpperCase().startsWith("SMARTSTOCK:")) {
+      setSearch("");
+      setUnknownBarcode("");
+      setExternalProduct(null);
+      selectMemberFromQr(rawBarcode, true);
+      return;
+    }
     const trimmedBarcode = barcodeValue.trim().replace(/[^A-Za-z0-9._-]/g, "");
     if (!trimmedBarcode) return;
     if (activeLookupRef.current === trimmedBarcode) return;
@@ -326,24 +352,7 @@ export function POS() {
       activeLookupRef.current = "";
       setTimeout(focusScanner, 0);
     }
-  }, [addProduct, search]);
-
-  function selectMemberFromQr(value: string, fromCamera = false) {
-    const id = memberIdFromQrCode(value);
-    if (!id && !fromCamera && !value.trim().toUpperCase().startsWith("SMARTSTOCK:")) return;
-    const customer = id
-      ? customers.find((row) => row.id.toLowerCase() === id && row.status === "ACTIVE" && row.customerType === "Member")
-      : undefined;
-    setIsMemberQrOpen(false);
-    setCustomerSearch("");
-    if (!customer) {
-      toast.error("That QR code is not an active SmartStock member card.");
-      return;
-    }
-    setCustomerId(customer.id);
-    setLoyaltyPointsRedeemed(0);
-    toast.success(`${customer.fullName} selected`);
-  }
+  }, [addProduct, search, selectMemberFromQr]);
 
   function reviewExternalProduct(product: ExternalProductDraft) {
     const params = new URLSearchParams({
