@@ -69,6 +69,7 @@ export interface Sale {
   change: string;
   paymentMethod: string;
   status: string;
+  loyaltyPointsEarned: number;
   createdAt: string;
   cashier?: User;
   customer?: { fullName: string } | null;

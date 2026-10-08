@@ -27,7 +27,9 @@ export const productSchema = z.object({
 export const supplierSchema = z.object({
   name: z.string().min(2),
   contactPerson: z.string().optional(),
-  phone: z.string().optional(),
+  phone: z.string()
+    .refine((value) => value === "" || /^09\d{9}$/.test(value), "Phone number must contain 11 digits and start with 09.")
+    .optional(),
   email: z.string().email().optional().or(z.literal("")),
   address: z.string().optional(),
   paymentTerms: z.string().optional(),

@@ -56,6 +56,36 @@ function displayValue(value: string | number | undefined, type?: ReportValueType
   return String(value);
 }
 
+function drawPdfText(doc: jsPDF, value: string, x: number, y: number, maxWidth?: number) {
+  const pesoIndex = value.indexOf("₱");
+  if (pesoIndex < 0) {
+    if (maxWidth === undefined) doc.text(value, x, y);
+    else doc.text(value, x, y, { maxWidth });
+    return;
+  }
+
+  // jsPDF's built-in Helvetica font cannot encode ₱, so draw it as P with two bars.
+  const prefix = value.slice(0, pesoIndex);
+  const amount = value.slice(pesoIndex + 1).trimStart();
+  const symbolX = x + doc.getTextWidth(prefix);
+  if (prefix) doc.text(prefix, x, y);
+  const symbolWidth = doc.getTextWidth("P");
+  doc.text("P", symbolX, y);
+
+  const capHeight = doc.getFontSize() / 2.83464567;
+  const extension = Math.max(0.15, capHeight * 0.05);
+  const lineWidth = doc.getLineWidth();
+  doc.setLineWidth(Math.max(0.12, capHeight * 0.045));
+  doc.line(symbolX - extension, y - capHeight * 0.47, symbolX + symbolWidth + extension, y - capHeight * 0.47);
+  doc.line(symbolX - extension, y - capHeight * 0.25, symbolX + symbolWidth + extension, y - capHeight * 0.25);
+  doc.setLineWidth(lineWidth);
+
+  const amountX = symbolX + symbolWidth + extension;
+  const amountWidth = maxWidth === undefined ? undefined : Math.max(1, x + maxWidth - amountX);
+  if (amountWidth === undefined) doc.text(amount, amountX, y);
+  else doc.text(amount, amountX, y, { maxWidth: amountWidth });
+}
+
 function csvCell(value: string | number | undefined, type?: ReportValueType) {
   const cell = type === "currency" || type === "number" || type === "percent" ? rawValue(value) : displayValue(value, type);
   return `"${String(typeof cell === "string" && /^[=+@\-\t\r]/.test(cell) ? "'" + cell : cell).replace(/"/g, '""')}"`;
@@ -81,7 +111,7 @@ export function exportReportCsv(report: ReportData) {
 }
 
 function applyExcelFormat(cell: ExcelJS.Cell, type?: ReportValueType) {
-  if (type === "currency") cell.numFmt = '"PHP" #,##0.00';
+  if (type === "currency") cell.numFmt = '"₱" #,##0.00';
   if (type === "percent") {
     cell.value = Number(cell.value ?? 0) / 100;
     cell.numFmt = "0.00%";
@@ -162,7 +192,7 @@ function drawTable(doc: jsPDF, columns: ReportColumn[], rows: Record<string, str
       y = margin;
       header();
     }
-    columns.forEach((column, index) => doc.text(displayValue(row[column.key], column.type) || "-", margin + index * columnWidth + 1, y, { maxWidth: columnWidth - 2 }));
+    columns.forEach((column, index) => drawPdfText(doc, displayValue(row[column.key], column.type) || "-", margin + index * columnWidth + 1, y, columnWidth - 2));
     y += 7;
   }
   return y;
@@ -209,7 +239,7 @@ export function exportReportPdf(report: ReportData) {
   report.summary.forEach((item, index) => {
     const x = margin + (index % 2) * half;
     if (index > 0 && index % 2 === 0) y += 5;
-    doc.text(`${item.label}: ${displayValue(item.value, item.type)}`, x, y, { maxWidth: half - 4 });
+    drawPdfText(doc, `${item.label}: ${displayValue(item.value, item.type)}`, x, y, half - 4);
   });
   y += 10;
 

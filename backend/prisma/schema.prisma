@@ -371,6 +371,7 @@ model Sale {
   status              SaleStatus    @default(COMPLETED)
   idempotencyKey      String?       @unique
   grossProfit         Decimal       @default(0) @db.Decimal(12, 2)
+  loyaltyPointsEarned Int           @default(0)
   customer            Customer?     @relation(fields: [customerId], references: [id])
   cashier             User          @relation("CashierSales", fields: [cashierId], references: [id])
   items               SaleItem[]

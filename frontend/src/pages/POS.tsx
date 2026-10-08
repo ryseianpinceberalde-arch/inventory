@@ -23,6 +23,7 @@ interface CartLine {
 
 interface HeldSale {
   id: string;
+  customerId?: string | null;
   notes?: string | null;
   createdAt: string;
   items: Array<{ id: string; quantity: number; discount: string; product: Product }>;
@@ -45,7 +46,16 @@ interface PendingPayMongoCheckout {
   checkoutSessionId: string;
   amountPaid: string;
   idempotencyKey: string;
+  customerId?: string | null;
   cart: CartLine[];
+}
+
+interface PosCustomer {
+  id: string;
+  fullName: string;
+  phone?: string | null;
+  loyaltyPoints: number;
+  status: string;
 }
 
 const posCartStorageKey = "smartstock.pos.cart";
@@ -72,6 +82,8 @@ export function POS() {
     }
   });
   const [amountPaid, setAmountPaid] = useState("");
+  const [customerId, setCustomerId] = useState("");
+  const [customerSearch, setCustomerSearch] = useState("");
   const [completedSale, setCompletedSale] = useState<Sale | null>(null);
   const scannerInputRef = useRef<HTMLInputElement>(null);
   const scannerBufferRef = useRef("");
@@ -82,6 +94,7 @@ export function POS() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const { data: products = [], isLoading: productsLoading, isError: productsError, refetch: refetchProducts } = useQuery({ queryKey: ["products-pos"], queryFn: () => getAllProducts<Product>() });
+  const { data: customers = [], isLoading: customersLoading } = useQuery({ queryKey: ["customers-pos"], queryFn: () => getData<PosCustomer[]>("/customers"), enabled: hasPermission("customers.view") });
   const { data: heldSales = [] } = useQuery({ queryKey: ["held-sales"], queryFn: () => getData<HeldSale[]>("/held-sales"), enabled: hasPermission("sales.resume") });
   const filteredProducts = useMemo(() => {
     const term = search.trim().toLowerCase();
@@ -92,6 +105,16 @@ export function POS() {
     const subtotal = cart.reduce((sum, line) => sum + Number(line.product.sellingPrice) * line.quantity - line.productDiscount, 0);
     return { subtotal, total: subtotal, change: Math.max(Number(amountPaid || 0) - subtotal, 0) };
   }, [amountPaid, cart]);
+  const selectedCustomer = customers.find((customer) => customer.id === customerId);
+  const pointsToEarn = customerId ? cart.reduce((sum, line) => sum + line.quantity, 0) : 0;
+  const customerSearchTerm = customerSearch.trim().toLowerCase();
+  const customerSearchDigits = customerSearch.replace(/\D/g, "");
+  const matchingCustomers = customerSearchTerm
+    ? customers.filter((customer) => customer.status === "ACTIVE" && (
+      customer.fullName.toLowerCase().includes(customerSearchTerm) ||
+      Boolean(customerSearchDigits && customer.phone?.replace(/\D/g, "").includes(customerSearchDigits))
+    )).slice(0, 8)
+    : [];
 
   const addProduct = useCallback((product: Product) => {
     setCart((lines) => {
@@ -111,7 +134,7 @@ export function POS() {
   }
 
   const saleMutation = useMutation({
-    mutationFn: async (input: { paymentMethod: "CASH" | "GCASH"; amountPaid: string; idempotencyKey: string; checkoutSessionId?: string; items: CartLine[] }) => {
+    mutationFn: async (input: { paymentMethod: "CASH" | "GCASH"; amountPaid: string; idempotencyKey: string; checkoutSessionId?: string; customerId?: string; items: CartLine[] }) => {
       const total = input.items.reduce((sum, line) => sum + Number(line.product.sellingPrice) * line.quantity - line.productDiscount, 0);
       if (Number(input.amountPaid || 0) < total) throw new Error("Amount paid is below total");
       const response = await api.post<ApiResponse<Sale>>("/sales", {
@@ -121,6 +144,7 @@ export function POS() {
         transactionDiscount: "0",
         idempotencyKey: input.idempotencyKey,
         checkoutSessionId: input.checkoutSessionId,
+        customerId: input.customerId || null,
         items: input.items.map((line) => ({ productId: line.product.id, quantity: line.quantity, productDiscount: String(line.productDiscount) }))
       });
       return response.data.data;
@@ -130,10 +154,12 @@ export function POS() {
       cashAttempt.current = null;
       setCompletedSale(sale);
       setCart([]);
+      setCustomerId("");
       setAmountPaid("");
       sessionStorage.removeItem(posCartStorageKey);
       sessionStorage.removeItem(pendingPayMongoStorageKey);
       await queryClient.invalidateQueries({ queryKey: ["products-pos"] });
+      await queryClient.invalidateQueries({ queryKey: ["customers-pos"] });
       await queryClient.invalidateQueries({ queryKey: ["dashboard"] });
     },
     onError: (error) => {
@@ -156,6 +182,7 @@ export function POS() {
         checkoutSessionId: checkout.id,
         amountPaid: String(checkout.amount),
         idempotencyKey: crypto.randomUUID(),
+        customerId: customerId || null,
         cart
       };
       sessionStorage.setItem(posCartStorageKey, JSON.stringify(cart));
@@ -170,12 +197,14 @@ export function POS() {
 
   const holdMutation = useMutation({
     mutationFn: async () => api.post("/held-sales", {
+      customerId: customerId || null,
       notes: `Held from POS at ${new Date().toLocaleString()}`,
       items: cart.map((line) => ({ productId: line.product.id, quantity: line.quantity, productDiscount: String(line.productDiscount) }))
     }),
     onSuccess: async () => {
       toast.success("Order held");
       setCart([]);
+      setCustomerId("");
       setAmountPaid("");
       sessionStorage.removeItem(posCartStorageKey);
       await queryClient.invalidateQueries({ queryKey: ["held-sales"] });
@@ -285,6 +314,7 @@ export function POS() {
     try {
       await removeHeldMutation.mutateAsync(heldSale.id);
       setCart(heldSale.items.map((item) => ({ product: item.product, quantity: item.quantity, productDiscount: Number(item.discount) })));
+      setCustomerId(heldSale.customerId ?? "");
       setAmountPaid("");
       toast.success("Held order resumed");
     } catch { /* The mutation displays the error and preserves the current cart. */ }
@@ -293,7 +323,7 @@ export function POS() {
   function checkoutCash() {
     const signature = JSON.stringify({ cart, amountPaid });
     if (cashAttempt.current?.signature !== signature) cashAttempt.current = { signature, key: crypto.randomUUID() };
-    saleMutation.mutate({ paymentMethod: "CASH", amountPaid, idempotencyKey: cashAttempt.current.key, items: cart });
+    saleMutation.mutate({ paymentMethod: "CASH", amountPaid, idempotencyKey: cashAttempt.current.key, customerId: customerId || undefined, items: cart });
   }
 
   function checkoutGcash() {
@@ -381,7 +411,8 @@ export function POS() {
           return;
         }
         setCart(pending.cart);
-        saleMutation.mutate({ paymentMethod: "GCASH", amountPaid: pending.amountPaid, idempotencyKey: pending.idempotencyKey, checkoutSessionId: pending.checkoutSessionId, items: pending.cart });
+        setCustomerId(pending.customerId ?? "");
+        saleMutation.mutate({ paymentMethod: "GCASH", amountPaid: pending.amountPaid, idempotencyKey: pending.idempotencyKey, checkoutSessionId: pending.checkoutSessionId, customerId: pending.customerId ?? undefined, items: pending.cart });
       } catch (error) {
         const message = error instanceof AxiosError ? error.response?.data?.message : undefined;
         toast.error(message ?? "Could not verify GCash payment.");
@@ -445,6 +476,21 @@ export function POS() {
         </div>
         <div className="mt-4 space-y-2">
           {cart.length === 0 && <p className="text-sm text-slate-500">No items in cart.</p>}
+          {hasPermission("customers.view") && <div className="space-y-2">
+            <span className="block text-sm font-medium">Customer (optional)</span>
+            {selectedCustomer ? <div className="flex items-center justify-between gap-2 rounded-md border border-teal-200 bg-teal-50 p-3 text-sm text-teal-900 dark:border-teal-900 dark:bg-teal-950 dark:text-teal-200">
+              <div><strong>{selectedCustomer.fullName}</strong><div className="text-xs">{selectedCustomer.phone || "No phone number"} · {selectedCustomer.loyaltyPoints} points · earns {pointsToEarn} this sale</div></div>
+              <Button type="button" className="h-8 bg-slate-700 px-3 text-xs" onClick={() => setCustomerId("")}>Change</Button>
+            </div> : <>
+              <Input aria-label="Find customer by name or phone" autoComplete="off" value={customerSearch} onChange={(event) => setCustomerSearch(event.target.value)} placeholder={customersLoading ? "Loading customers..." : "Search customer by name or phone"} />
+              {customerSearchTerm && <div className="max-h-56 overflow-y-auto rounded-md border border-line dark:border-slate-700">
+                {matchingCustomers.length > 0 ? matchingCustomers.map((customer) => <button key={customer.id} type="button" className="flex w-full items-center justify-between gap-3 border-b border-line px-3 py-2 text-left text-sm last:border-b-0 hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800" onClick={() => { setCustomerId(customer.id); setCustomerSearch(""); }}>
+                  <span><strong className="block">{customer.fullName}</strong><span className="text-xs text-slate-500">{customer.phone || "No phone number"}</span></span><span className="shrink-0 text-xs">{customer.loyaltyPoints} pts</span>
+                </button>) : <div className="p-3 text-sm text-slate-500">No active customer found. {hasPermission("customers.create") && <button type="button" className="font-medium text-brand underline" onClick={() => navigate("/customers")}>Add customer</button>}</div>}
+              </div>}
+              {!customerId && <button type="button" className="text-xs text-slate-500 underline" onClick={() => setCustomerSearch("")}>Continue as walk-in (no points)</button>}
+            </>}
+          </div>}
           {cart.map((line) => <div key={line.product.id} className="grid grid-cols-[minmax(0,1fr)_64px_64px_24px] items-center gap-2 rounded-md border border-line p-3 text-sm"><div><strong className="block">{line.product.name}</strong><span className="text-xs text-slate-500">{line.product.barcode}</span></div><span className="text-right">{peso(line.product.sellingPrice)}</span><Input className="h-8 text-center" min="1" max={line.product.currentStock} type="number" value={line.quantity} onChange={(event) => setCart((rows) => rows.map((row) => row.product.id === line.product.id ? { ...row, quantity: Math.min(line.product.currentStock, Math.max(1, Number(event.target.value || 1))) } : row))} /><button onClick={() => setCart((rows) => rows.filter((row) => row.product.id !== line.product.id))} aria-label={`Remove ${line.product.name}`}><Trash2 size={16} /></button><span className="col-span-4 text-right font-semibold">{peso(Number(line.product.sellingPrice) * line.quantity - line.productDiscount)}</span></div>)}
         </div>
         {heldSales.length > 0 && (
@@ -482,6 +528,7 @@ function ReceiptDialog({ sale, onClose }: { sale: Sale; onClose: () => void }) {
             <div className="flex justify-between gap-3"><span>Receipt</span><span>{sale.receiptNo}</span></div>
             <div className="flex justify-between gap-3"><span>Date</span><span>{new Date(sale.createdAt).toLocaleString("en-PH", { timeZone: "Asia/Manila" })}</span></div>
             <div className="flex justify-between gap-3"><span>Cashier</span><span>{sale.cashier?.fullName ?? "-"}</span></div>
+            {sale.customer && <div className="flex justify-between gap-3"><span>Customer</span><span>{sale.customer.fullName}</span></div>}
             <div className="flex justify-between gap-3"><span>Payment</span><span>{sale.paymentMethod}</span></div>
           </div>
           <div className="my-3 border-t border-dashed border-slate-400" />
@@ -501,6 +548,7 @@ function ReceiptDialog({ sale, onClose }: { sale: Sale; onClose: () => void }) {
             <div className="flex justify-between gap-3 text-sm font-bold"><span>Total</span><span>{peso(sale.total)}</span></div>
             <div className="flex justify-between gap-3"><span>Amount paid</span><span>{peso(sale.amountPaid)}</span></div>
             <div className="flex justify-between gap-3"><span>Change</span><span>{peso(sale.change)}</span></div>
+            {sale.loyaltyPointsEarned > 0 && <div className="flex justify-between gap-3 font-bold"><span>Loyalty points earned</span><span>{sale.loyaltyPointsEarned}</span></div>}
           </div>
           <div className="mt-4 text-center">Thank you</div>
         </div>

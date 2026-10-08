@@ -1,0 +1,2 @@
+ALTER TABLE "Sale"
+ADD COLUMN "loyaltyPointsEarned" INTEGER NOT NULL DEFAULT 0;

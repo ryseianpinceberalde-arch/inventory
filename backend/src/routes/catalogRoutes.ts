@@ -35,6 +35,7 @@ supplierRoutes.put("/:id", requirePermission("suppliers.update"), validate(suppl
 export const supplierProductRoutes = Router();
 supplierProductRoutes.use(authenticate);
 supplierProductRoutes.get("/", requirePermission("suppliers.view"), controller.listSupplierProducts);
+supplierProductRoutes.post("/", requirePermission("suppliers.update"), validate(supplierProductSchema), controller.createSupplierProduct);
 supplierProductRoutes.put("/:id", requirePermission("suppliers.update"), validate(supplierProductSchema), controller.updateSupplierProduct);
 
 export const customerRoutes = Router();

@@ -4,7 +4,7 @@ import { KeyboardEvent, ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { QueryState } from "../components/ui/QueryState";
 import { Card } from "../components/ui/Card";
-import { getData } from "../services/api";
+import { errorMessage, getData } from "../services/api";
 import { peso } from "../lib/format";
 import { useAuth } from "../contexts/AuthContext";
 
@@ -85,9 +85,9 @@ function DashboardSummaryCard({ children, to, label, colorClass }: { children: R
 }
 
 export function Dashboard() {
-  const { data, isLoading, isError, refetch } = useQuery({ queryKey: ["dashboard"], queryFn: () => getData<DashboardData>("/dashboard") });
+  const { data, isLoading, isError, error, refetch } = useQuery({ queryKey: ["dashboard"], queryFn: () => getData<DashboardData>("/dashboard") });
   const { hasAnyPermission } = useAuth();
-  if (isError) return <QueryState error onRetry={() => void refetch()} />;
+  if (isError) return <QueryState error message={errorMessage(error)} onRetry={() => void refetch()} />;
   if (isLoading || !data) return <div className="grid gap-4 md:grid-cols-4">{Array.from({ length: 8 }).map((_, i) => <Card key={i} className="h-28 animate-pulse" />)}</div>;
   const summary = data.summary;
   const bestSellingProducts = data.tables.bestSellingProducts.slice(0, 3);

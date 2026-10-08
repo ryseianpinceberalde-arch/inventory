@@ -8,6 +8,7 @@ import * as inventory from "../services/inventoryService.js";
 import * as sales from "../services/salesService.js";
 import { audit } from "../services/auditService.js";
 import { serializeForPermissions } from "../rbac/serializers.js";
+import { salesListQuerySchema } from "../validators/inventoryValidators.js";
 
 export const stockIn = asyncHandler(async (req: Request, res: Response) => {
   if (!req.user) throw new AppError("Authentication required", 401);
@@ -92,7 +93,15 @@ export const processRefund = asyncHandler(async (req: Request, res: Response) =>
 
 export const salesList = asyncHandler(async (req: Request, res: Response) => {
   if (!req.user) throw new AppError("Authentication is required.", 401);
-  const where = req.user.permissions.includes("sales.view_all") ? {} : { cashierId: req.user.id };
+  const filters = salesListQuerySchema.parse(req.query);
+  const where: Prisma.SaleWhereInput = req.user.permissions.includes("sales.view_all") ? {} : { cashierId: req.user.id };
+  if (filters.status) where.status = filters.status;
+  if (filters.paymentMethod) where.paymentMethod = filters.paymentMethod;
+
+  const from = filters.from ? new Date(`${filters.from}T00:00:00+08:00`) : undefined;
+  const to = filters.to ? new Date(`${filters.to}T00:00:00+08:00`) : undefined;
+  if (to) to.setUTCDate(to.getUTCDate() + 1);
+  if (from || to) where.createdAt = { ...(from ? { gte: from } : {}), ...(to ? { lt: to } : {}) };
   return ok(res, "Sales loaded", serializeForPermissions(await prisma.sale.findMany({ where, include: { customer: true, cashier: true, items: { include: { product: true } }, payments: true }, orderBy: { createdAt: "desc" }, take: 200 }), req.user.permissions));
 });
 

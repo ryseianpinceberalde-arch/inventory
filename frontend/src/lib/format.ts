@@ -1,7 +1,11 @@
 import { format } from "date-fns";
 
 export function peso(value: number | string) {
-  return new Intl.NumberFormat("en-PH", { style: "currency", currency: "PHP" }).format(Number(value));
+  return new Intl.NumberFormat("en-PH", {
+    style: "currency",
+    currency: "PHP",
+    currencyDisplay: "narrowSymbol"
+  }).format(Number(value));
 }
 
 export function manilaDate(value: string | Date, pattern = "MMMM d, yyyy") {

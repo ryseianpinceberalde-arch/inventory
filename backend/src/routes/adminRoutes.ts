@@ -32,6 +32,7 @@ permissionRoutes.get("/grouped", requirePermission("roles.view"), controller.gro
 
 export const auditRoutes = Router();
 auditRoutes.use(authenticate);
+auditRoutes.get("/filter-options", requirePermission("audit_logs.view"), controller.auditLogFilterOptions);
 auditRoutes.get("/", requirePermission("audit_logs.view"), controller.auditLogs);
 
 export const settingRoutes = Router();

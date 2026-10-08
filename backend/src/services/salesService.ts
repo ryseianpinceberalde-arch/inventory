@@ -75,6 +75,10 @@ export async function completeSale(input: {
       const used = await tx.payment.findFirst({ where: { referenceNumber: input.checkoutSessionId } });
       if (used) throw new AppError("This payment was already recorded. Open sales to view its receipt.", 409);
     }
+    if (input.customerId) {
+      const customer = await tx.customer.findUnique({ where: { id: input.customerId }, select: { status: true } });
+      if (!customer || customer.status !== "ACTIVE") throw new AppError("Active customer not found", 404);
+    }
     const lines = [];
     let subtotal = new Prisma.Decimal(0);
     let grossProfit = new Prisma.Decimal(0);
@@ -98,6 +102,7 @@ export async function completeSale(input: {
     if (verifiedAmount && !verifiedAmount.eq(total)) throw new AppError("Paid amount differs from the current sale total. Review this payment before continuing.", 409);
     const amountPaid = verifiedAmount ?? new Prisma.Decimal(input.amountPaid);
     if (amountPaid.lt(total)) throw new AppError("Amount paid is below total", 400);
+    const loyaltyPointsEarned = input.customerId ? lines.reduce((points, line) => points + line.quantity, 0) : 0;
 
     const sale = await tx.sale.create({
       data: {
@@ -113,6 +118,7 @@ export async function completeSale(input: {
         paymentMethod: input.paymentMethod,
         idempotencyKey: input.idempotencyKey,
         grossProfit: grossProfit.sub(discountTotal),
+        loyaltyPointsEarned,
         items: {
           create: lines.map((line) => ({
             productId: line.product.id,
@@ -135,6 +141,10 @@ export async function completeSale(input: {
       },
       include: { items: { include: { product: true } }, payments: true, customer: true, cashier: true }
     });
+
+    if (input.customerId && loyaltyPointsEarned > 0) {
+      await tx.customer.update({ where: { id: input.customerId }, data: { loyaltyPoints: { increment: loyaltyPointsEarned } } });
+    }
 
     for (const line of lines) {
       const newQuantity = line.product.currentStock - line.quantity;
@@ -200,6 +210,15 @@ export async function processRefund(input: {
       },
       include: { items: true }
     });
+    const previouslyRefundedQuantity = sale.refunds.flatMap((row) => row.items).reduce((sum, row) => sum + row.quantity, 0);
+    const currentRefundQuantity = refundItems.reduce((sum, row) => sum + row.quantity, 0);
+    const pointsToRevoke = Math.max(0,
+      Math.min(sale.loyaltyPointsEarned, previouslyRefundedQuantity + currentRefundQuantity) -
+      Math.min(sale.loyaltyPointsEarned, previouslyRefundedQuantity)
+    );
+    if (sale.customerId && pointsToRevoke > 0) {
+      await tx.$executeRaw`UPDATE "Customer" SET "loyaltyPoints" = GREATEST("loyaltyPoints" - ${pointsToRevoke}, 0), "updatedAt" = CURRENT_TIMESTAMP WHERE "id" = ${sale.customerId}::uuid`;
+    }
     for (const item of [...refundItems].sort((a, b) => a.productId.localeCompare(b.productId))) {
       await tx.$queryRaw`SELECT id FROM "Product" WHERE id = ${item.productId}::uuid FOR UPDATE`;
       const product = await tx.product.findUniqueOrThrow({ where: { id: item.productId } });

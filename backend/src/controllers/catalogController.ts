@@ -199,6 +199,42 @@ export const listSupplierProducts = asyncHandler(async (req: Request, res: Respo
   return ok(res, "Supplier products loaded", serializeForPermissions(data, req.user?.permissions ?? []));
 });
 
+export const createSupplierProduct = asyncHandler(async (req: Request, res: Response) => {
+  const [supplier, product] = await Promise.all([
+    prisma.supplier.findUnique({ where: { id: req.body.supplierId }, select: { id: true, status: true } }),
+    prisma.product.findUnique({ where: { id: req.body.productId }, select: { id: true, status: true } })
+  ]);
+  if (!supplier || supplier.status !== "ACTIVE") throw new AppError("Select an active supplier.", 422);
+  if (!product || product.status !== ProductStatus.ACTIVE) throw new AppError("Select an active product.", 422);
+
+  const existing = await prisma.supplierProduct.findUnique({
+    where: { supplierId_productId: { supplierId: req.body.supplierId, productId: req.body.productId } },
+    select: { id: true }
+  });
+  if (existing) throw new AppError("This supplier product already exists.", 409);
+
+  const row = await prisma.supplierProduct.create({
+    data: { supplierId: req.body.supplierId, productId: req.body.productId },
+    include: { supplier: true, product: { include: { category: true } } }
+  });
+  const data = {
+    id: row.id,
+    supplierId: row.supplierId,
+    productId: row.productId,
+    supplier: row.supplier.name,
+    product: row.product.name,
+    sku: row.product.sku,
+    barcode: row.product.barcode,
+    category: row.product.category.name,
+    currentStock: row.product.currentStock,
+    costPrice: row.product.costPrice,
+    sellingPrice: row.product.sellingPrice,
+    status: row.product.status
+  };
+  await audit({ userId: req.user?.id, action: "SUPPLIER_PRODUCT_CREATE", module: "SUPPLIERS", recordId: row.id, newData: row });
+  return created(res, "Supplier product added", serializeForPermissions(data, req.user?.permissions ?? []));
+});
+
 export const updateSupplierProduct = asyncHandler(async (req: Request, res: Response) => {
   const old = await prisma.supplierProduct.findUnique({ where: { id: req.params.id }, include: { supplier: true, product: true } });
   if (!old) throw new AppError("Supplier product not found", 404);

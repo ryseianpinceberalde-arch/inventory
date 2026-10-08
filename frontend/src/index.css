@@ -90,6 +90,10 @@
     box-shadow: none;
     break-inside: avoid;
   }
+  .receipt-print,
+  .barcode-print {
+    font-family: "Segoe UI", Arial, sans-serif;
+  }
 }
 
 @layer base {

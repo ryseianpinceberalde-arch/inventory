@@ -7,6 +7,7 @@ import { Input } from "../components/ui/Input";
 import { QueryState } from "../components/ui/QueryState";
 import { api, errorMessage, getAllProducts, getData } from "../services/api";
 import { useAuth } from "../contexts/AuthContext";
+import { peso } from "../lib/format";
 import type { Product } from "../types/api";
 
 const selectClass = "mt-1 h-11 w-full rounded-lg border border-line px-3 text-sm dark:border-slate-700";
@@ -107,7 +108,7 @@ export function StockIn() {
         </div>;
       })}
       <Button type="button" className="bg-slate-700" disabled={products.isLoading || products.isError || items.length >= 200 || items.length >= activeProducts.length} onClick={() => setItems((rows) => [...rows, emptyStockInLine()])}>Add another product</Button>
-      <div className="rounded-lg bg-slate-50 p-3 text-sm dark:bg-slate-900"><div className="flex justify-between"><span>Total units</span><strong>{totalUnits}</strong></div><div className="mt-1 flex justify-between"><span>Estimated receipt total</span><strong>PHP {receiptTotal.toFixed(2)}</strong></div></div>
+      <div className="rounded-lg bg-slate-50 p-3 text-sm dark:bg-slate-900"><div className="flex justify-between"><span>Total units</span><strong>{totalUnits}</strong></div><div className="mt-1 flex justify-between"><span>Estimated receipt total</span><strong>{peso(receiptTotal)}</strong></div></div>
       {error && <p role="alert" className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</p>}
       <Button type="submit" busy={mutation.isPending} disabled={suppliers.isLoading || suppliers.isError || products.isLoading || products.isError || activeProducts.length === 0}>{mutation.isPending ? "Saving..." : "Record stock-in"}</Button>
     </fieldset></form>

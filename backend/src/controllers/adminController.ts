@@ -11,6 +11,23 @@ import { audit } from "../services/auditService.js";
 import { AppError } from "../utils/AppError.js";
 import { serializeForPermissions } from "../rbac/serializers.js";
 import { buildReport } from "../services/reportService.js";
+import { z } from "zod";
+
+const auditLogDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine((value) => {
+  const date = new Date(`${value}T00:00:00+08:00`);
+  return Number.isFinite(date.getTime()) && businessDateKey(date) === value;
+}, "Enter a valid date in YYYY-MM-DD format");
+
+const auditLogFiltersSchema = z.object({
+  from: auditLogDate.optional(),
+  to: auditLogDate.optional(),
+  module: z.string().trim().min(1).max(80).optional(),
+  action: z.string().trim().min(1).max(100).optional(),
+  userId: z.string().uuid().optional()
+}).refine(({ from, to }) => !from || !to || from <= to, {
+  message: "Start date must be before or equal to the end date",
+  path: ["to"]
+});
 
 const userSelect = {
   id: true,
@@ -218,8 +235,36 @@ export const groupedPermissions = asyncHandler(async (_req: Request, res: Respon
   return ok(res, "Grouped permissions loaded", grouped);
 });
 
-export const auditLogs = asyncHandler(async (_req: Request, res: Response) => {
-  return ok(res, "Audit logs loaded", await prisma.auditLog.findMany({ include: { user: { select: userSelect } }, orderBy: { createdAt: "desc" }, take: 300 }));
+export const auditLogs = asyncHandler(async (req: Request, res: Response) => {
+  const filters = auditLogFiltersSchema.parse(req.query);
+  const where: Prisma.AuditLogWhereInput = {};
+  if (filters.module) where.module = { contains: filters.module, mode: "insensitive" };
+  if (filters.action) where.action = { contains: filters.action, mode: "insensitive" };
+  if (filters.userId) where.userId = filters.userId;
+
+  const from = filters.from ? new Date(`${filters.from}T00:00:00+08:00`) : undefined;
+  const to = filters.to ? new Date(`${filters.to}T00:00:00+08:00`) : undefined;
+  if (to) to.setUTCDate(to.getUTCDate() + 1);
+  if (from || to) where.createdAt = { ...(from ? { gte: from } : {}), ...(to ? { lt: to } : {}) };
+
+  const rows = await prisma.auditLog.findMany({ where, include: { user: { select: userSelect } }, orderBy: { createdAt: "desc" }, take: 300 });
+  return ok(res, "Audit logs loaded", serializeForPermissions(rows, req.user?.permissions ?? []));
+});
+
+export const auditLogFilterOptions = asyncHandler(async (_req: Request, res: Response) => {
+  const [moduleRows, actionRows, userRows] = await Promise.all([
+    prisma.auditLog.findMany({ distinct: ["module"], select: { module: true } }),
+    prisma.auditLog.findMany({ distinct: ["action"], select: { action: true } }),
+    prisma.auditLog.findMany({ where: { userId: { not: null } }, distinct: ["userId"], select: { userId: true } })
+  ]);
+  const userIds = userRows.flatMap((row) => row.userId ? [row.userId] : []);
+  const users = userIds.length ? await prisma.user.findMany({ where: { id: { in: userIds } }, select: { id: true, fullName: true }, orderBy: { fullName: "asc" } }) : [];
+
+  return ok(res, "Audit log filter options loaded", {
+    modules: moduleRows.map((row) => row.module).sort(),
+    actions: actionRows.map((row) => row.action).sort(),
+    users
+  });
 });
 
 export const settings = asyncHandler(async (_req: Request, res: Response) => {

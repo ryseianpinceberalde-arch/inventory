@@ -1,5 +1,22 @@
 import { z } from "zod";
+import { PaymentMethod, SaleStatus } from "@prisma/client";
 import { money, dateValue, uniqueProducts } from "./common.js";
+import { businessDateKey } from "../utils/businessDate.js";
+
+const salesFilterDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine((value) => {
+  const date = new Date(`${value}T00:00:00+08:00`);
+  return Number.isFinite(date.getTime()) && businessDateKey(date) === value;
+}, "Enter a valid date in YYYY-MM-DD format");
+
+export const salesListQuerySchema = z.object({
+  from: salesFilterDate.optional(),
+  to: salesFilterDate.optional(),
+  paymentMethod: z.nativeEnum(PaymentMethod).optional(),
+  status: z.nativeEnum(SaleStatus).optional()
+}).refine(({ from, to }) => !from || !to || from <= to, {
+  message: "Start date must be before or equal to the end date",
+  path: ["to"]
+});
 
 export const stockInSchema = z.object({
   referenceNo: z.string().min(3),
