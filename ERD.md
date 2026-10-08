@@ -42,6 +42,9 @@ erDiagram
   SALE ||--o{ PAYMENT : paid_by
   SALE ||--o{ REFUND : refunded_by
   REFUND ||--o{ REFUND_ITEM : contains
+  CUSTOMER ||--o{ LOYALTY_TRANSACTION : has
+  SALE o|--o| LOYALTY_TRANSACTION : earns_or_redeems
+  REFUND o|--o| LOYALTY_TRANSACTION : reverses
   PRODUCT ||--o{ REFUND_ITEM : returned
 
   HELD_SALE ||--o{ HELD_SALE_ITEM : contains
@@ -110,6 +113,9 @@ erDiagram
     string barcode UK
     decimal costPrice
     decimal sellingPrice
+    decimal memberPrice
+    decimal wholesalePrice
+    int wholesaleMinQuantity
     int currentStock
     int reorderLevel
     string unit
@@ -200,6 +206,18 @@ erDiagram
     timestamptz updatedAt
   }
 
+  LOYALTY_TRANSACTION {
+    uuid id PK
+    uuid customerId FK
+    uuid saleId FK UK
+    uuid refundId FK UK
+    string transactionType
+    int pointsEarned
+    int pointsRedeemed
+    string note
+    timestamptz createdAt
+  }
+
   STOCK_RECEIPT {
     uuid id PK
     string referenceNo UK
@@ -264,6 +282,9 @@ erDiagram
     SaleStatus status
     string idempotencyKey UK
     decimal grossProfit
+    int loyaltyPointsEarned
+    int loyaltyPointsRedeemed
+    decimal loyaltyDiscount
     timestamptz createdAt
     timestamptz updatedAt
   }

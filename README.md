@@ -4,7 +4,7 @@ SmartStock is a PERN-based inventory, barcode POS, sales, and analytics system f
 
 ## Technology Stack
 
-- Frontend: React, Vite, TypeScript, Tailwind CSS, React Router, TanStack Query, React Hook Form, Zod, Recharts, Lucide React, Axios, date-fns, html5-qrcode, jsPDF, React Hot Toast
+- Frontend: React, Vite, TypeScript, Tailwind CSS, React Router, TanStack Query, React Hook Form, Zod, Recharts, Lucide React, Axios, date-fns, html5-qrcode, qrcode, jsPDF, React Hot Toast
 - Backend: Node.js, Express, TypeScript, PostgreSQL, Prisma, JWT, bcrypt, Zod, Helmet, CORS, Morgan, Express Rate Limit, Cookie Parser, Multer
 
 ## Architecture

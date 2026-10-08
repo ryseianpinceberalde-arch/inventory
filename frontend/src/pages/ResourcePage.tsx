@@ -17,7 +17,7 @@ import { useAuth } from "../contexts/AuthContext";
 import type { ApiResponse } from "../types/api";
 import { api, getData, getAllProducts, errorMessage } from "../services/api";
 import { Can } from "../components/rbac/Can";
-import { peso } from "../lib/format";
+import { isMoneyInputWithinLimit, MAX_MONEY_INPUT, peso } from "../lib/format";
 
 interface ResourcePageProps {
   title: string;
@@ -43,11 +43,13 @@ interface ProductFormState {
   description: string;
   costPrice: string;
   sellingPrice: string;
+  memberPrice: string;
+  wholesalePrice: string;
+  wholesaleMinQuantity: string;
   currentStock: string;
   reorderLevel: string;
   unit: string;
   imageUrl: string;
-  tracksExpiration: boolean;
 }
 
 interface SupplierFormState {
@@ -73,6 +75,9 @@ interface GenericField {
   className?: string;
   required?: boolean;
   createOnly?: boolean;
+  min?: string;
+  max?: string;
+  step?: string;
 }
 
 interface GenericResourceConfig {
@@ -95,11 +100,13 @@ const emptyProductForm: ProductFormState = {
   description: "",
   costPrice: "",
   sellingPrice: "",
+  memberPrice: "",
+  wholesalePrice: "",
+  wholesaleMinQuantity: "10",
   currentStock: "0",
   reorderLevel: "0",
   unit: "pcs",
-  imageUrl: "",
-  tracksExpiration: false
+  imageUrl: ""
 };
 
 const emptySupplierForm: SupplierFormState = {
@@ -113,6 +120,8 @@ const emptySupplierForm: SupplierFormState = {
   status: "ACTIVE",
   notes: ""
 };
+
+const MAX_PRODUCT_STOCK = 2_147_483_647;
 
 const pageSize = 10;
 
@@ -279,7 +288,7 @@ function getGenericResourceConfig(endpoint: string, title: string): GenericResou
           ]
         },
         { key: "loyaltyPoints", placeholder: "Loyalty points", type: "number" },
-        { key: "creditBalance", placeholder: "Credit balance", type: "number" },
+        { key: "creditBalance", placeholder: "Credit balance", type: "number", min: "0", max: MAX_MONEY_INPUT, step: "0.01" },
         { key: "birthday", placeholder: "Birthday", type: "date" },
         { key: "status", placeholder: "Status", options: [{ value: "ACTIVE", label: "Active" }, { value: "ARCHIVED", label: "Archived" }] },
         { key: "address", placeholder: "Address", className: "md:col-span-2" },
@@ -431,10 +440,10 @@ export function ResourcePage({ title, endpoint, columns, showCreate = true }: Re
       imageUrl: payload.imageUrl.trim() || undefined,
       costPrice: payload.costPrice || undefined,
       sellingPrice: payload.sellingPrice,
+      ...(hasPermission("settings.update") ? { memberPrice: payload.memberPrice || null, wholesalePrice: payload.wholesalePrice || null, wholesaleMinQuantity: Number(payload.wholesaleMinQuantity || 10) } : {}),
       currentStock: editingProductId ? undefined : Number(payload.currentStock),
       reorderLevel: Number(payload.reorderLevel),
       unit: payload.unit.trim() || "pcs",
-      tracksExpiration: payload.tracksExpiration,
       status: "ACTIVE"
     }),
     onSuccess: (_response, payload) => {
@@ -489,10 +498,10 @@ export function ResourcePage({ title, endpoint, columns, showCreate = true }: Re
       imageUrl: payload.imageUrl.trim() || undefined,
       costPrice: payload.costPrice || undefined,
       sellingPrice: payload.sellingPrice,
+      ...(hasPermission("settings.update") ? { memberPrice: payload.memberPrice || null, wholesalePrice: payload.wholesalePrice || null, wholesaleMinQuantity: Number(payload.wholesaleMinQuantity || 10) } : {}),
       currentStock: editingProductId ? undefined : Number(payload.currentStock),
       reorderLevel: Number(payload.reorderLevel),
       unit: payload.unit.trim() || "pcs",
-      tracksExpiration: payload.tracksExpiration,
       status: "ACTIVE"
     }),
     onSuccess: () => {
@@ -669,11 +678,13 @@ export function ResourcePage({ title, endpoint, columns, showCreate = true }: Re
       description: text(row.description),
       costPrice: text(row.costPrice),
       sellingPrice: text(row.sellingPrice),
+      memberPrice: text(row.memberPrice),
+      wholesalePrice: text(row.wholesalePrice),
+      wholesaleMinQuantity: text(row.wholesaleMinQuantity) || "10",
       currentStock: text(row.currentStock) || "0",
       reorderLevel: text(row.reorderLevel) || "0",
       unit: text(row.unit) || "pcs",
-      imageUrl: text(row.imageUrl),
-      tracksExpiration: Boolean(row.tracksExpiration)
+      imageUrl: text(row.imageUrl)
     };
   }
 
@@ -1015,23 +1026,32 @@ export function ResourcePage({ title, endpoint, columns, showCreate = true }: Re
               </section>
 
               <section className="space-y-4 rounded-xl border border-line p-4 dark:border-slate-700 sm:p-5">
-                <div><h3 className="font-semibold">Pricing and inventory</h3><p className="mt-1 text-xs text-slate-500">Prices are per unit. Use Inventory adjustment to change stock after the product is created.</p></div>
+                <div><h3 className="font-semibold">Pricing and inventory</h3><p className="mt-1 text-xs text-slate-500">Prices are per unit, up to {peso(MAX_MONEY_INPUT)} (12 digits). Use Inventory adjustment to change stock after the product is created.</p></div>
                 <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
                   <label htmlFor="product-cost-price" className="grid gap-1.5 text-sm font-medium">Cost price (PHP)
-                    <Input id="product-cost-price" aria-label="Cost price in PHP" required={!editingProductId || hasPermission("products.view_cost")} disabled={Boolean(editingProductId) && !hasPermission("products.view_cost")} min="0" step="0.01" type="number" placeholder="0.00" value={productForm.costPrice} onChange={(event) => updateProductForm("costPrice", event.target.value)} />
+                    <Input id="product-cost-price" aria-label="Cost price in PHP" required={!editingProductId || hasPermission("products.view_cost")} disabled={Boolean(editingProductId) && !hasPermission("products.view_cost")} min="0" max={MAX_MONEY_INPUT} step="0.01" type="number" placeholder="0.00" value={productForm.costPrice} onChange={(event) => { if (isMoneyInputWithinLimit(event.target.value)) updateProductForm("costPrice", event.target.value); }} />
                   </label>
                   <label htmlFor="product-selling-price" className="grid gap-1.5 text-sm font-medium">Selling price (PHP)
-                    <Input id="product-selling-price" aria-label="Selling price in PHP" required min="0" step="0.01" type="number" placeholder="0.00" value={productForm.sellingPrice} onChange={(event) => updateProductForm("sellingPrice", event.target.value)} />
+                    <Input id="product-selling-price" aria-label="Selling price in PHP" required min="0" max={MAX_MONEY_INPUT} step="0.01" type="number" placeholder="0.00" value={productForm.sellingPrice} onChange={(event) => { if (isMoneyInputWithinLimit(event.target.value)) updateProductForm("sellingPrice", event.target.value); }} />
                   </label>
+                  {hasPermission("settings.update") && <>
+                    <label htmlFor="product-member-price" className="grid gap-1.5 text-sm font-medium">Optional member price (PHP)
+                      <Input id="product-member-price" aria-label="Optional member price in PHP" min="0" max={MAX_MONEY_INPUT} step="0.01" type="number" placeholder="Use retail price" value={productForm.memberPrice} onChange={(event) => { if (isMoneyInputWithinLimit(event.target.value)) updateProductForm("memberPrice", event.target.value); }} />
+                    </label>
+                    <label htmlFor="product-wholesale-price" className="grid gap-1.5 text-sm font-medium">Optional wholesale price (PHP)
+                      <Input id="product-wholesale-price" aria-label="Optional wholesale price in PHP" min="0" max={MAX_MONEY_INPUT} step="0.01" type="number" placeholder="Use retail price" value={productForm.wholesalePrice} onChange={(event) => { if (isMoneyInputWithinLimit(event.target.value)) updateProductForm("wholesalePrice", event.target.value); }} />
+                    </label>
+                    <label htmlFor="product-wholesale-min-quantity" className="grid gap-1.5 text-sm font-medium">Wholesale minimum quantity
+                      <Input id="product-wholesale-min-quantity" aria-label="Wholesale minimum quantity" min="1" max={MAX_PRODUCT_STOCK} step="1" type="number" required={Boolean(productForm.wholesalePrice)} value={productForm.wholesaleMinQuantity} onChange={(event) => { const value = event.target.value; if (/^\d{0,10}$/.test(value) && (!value || Number(value) <= MAX_PRODUCT_STOCK)) updateProductForm("wholesaleMinQuantity", value); }} />
+                    </label>
+                  </>}
                   <label htmlFor="product-current-stock" className="grid gap-1.5 text-sm font-medium">Starting stock
-                    <Input id="product-current-stock" disabled={Boolean(editingProductId)} title="Use Inventory adjustment to change existing stock" required min="0" step="1" type="number" value={productForm.currentStock} onChange={(event) => updateProductForm("currentStock", event.target.value)} />
+                    <Input id="product-current-stock" disabled={Boolean(editingProductId)} title="Use Inventory adjustment to change existing stock" required min="0" max={MAX_PRODUCT_STOCK} step="1" type="number" value={productForm.currentStock} onChange={(event) => { const value = event.target.value; if (value === "" || (/^\d{1,10}$/.test(value) && Number(value) <= MAX_PRODUCT_STOCK)) updateProductForm("currentStock", value); }} />
+                    <span className="text-xs font-normal text-slate-500">Maximum: {MAX_PRODUCT_STOCK.toLocaleString()} units</span>
                   </label>
                   <label htmlFor="product-reorder-level" className="grid gap-1.5 text-sm font-medium">Low-stock alert level
-                    <Input id="product-reorder-level" required min="0" step="1" type="number" value={productForm.reorderLevel} onChange={(event) => updateProductForm("reorderLevel", event.target.value)} />
-                  </label>
-                  <label className="flex min-h-11 items-center gap-3 rounded-lg border border-line px-3 text-sm font-medium dark:border-slate-700 sm:col-span-2 xl:col-span-4">
-                    <input type="checkbox" className="h-4 w-4 accent-brand" checked={productForm.tracksExpiration} onChange={(event) => updateProductForm("tracksExpiration", event.target.checked)} />
-                    Track expiration dates for this product
+                    <Input id="product-reorder-level" required min="0" max={MAX_PRODUCT_STOCK} step="1" type="number" value={productForm.reorderLevel} onChange={(event) => { const value = event.target.value; if (value === "" || (/^\d{1,10}$/.test(value) && Number(value) <= MAX_PRODUCT_STOCK)) updateProductForm("reorderLevel", value); }} />
+                    <span className="text-xs font-normal text-slate-500">Maximum: {MAX_PRODUCT_STOCK.toLocaleString()} units</span>
                   </label>
                 </div>
               </section>
@@ -1142,7 +1162,7 @@ export function ResourcePage({ title, endpoint, columns, showCreate = true }: Re
                     <div key={field.key}>{select}</div>
                   );
                 }
-                return <Input key={field.key} required={field.required} className={field.className} type={field.type ?? "text"} placeholder={field.placeholder} value={genericForm[field.key] ?? ""} onChange={(event) => updateGenericForm(field.key, event.target.value)} />;
+                return <Input key={field.key} required={field.required} className={field.className} type={field.type ?? "text"} min={field.min} max={field.max} step={field.step} placeholder={field.placeholder} value={genericForm[field.key] ?? ""} onChange={(event) => updateGenericForm(field.key, event.target.value)} />;
               })}
             </div>
             <div className="flex justify-end gap-2">
@@ -1154,7 +1174,12 @@ export function ResourcePage({ title, endpoint, columns, showCreate = true }: Re
       )}
       {isError && <QueryState error message={errorMessage(resourceError)} onRetry={() => void refetch()} />}
       <Card>
-        <div className="mb-4 flex flex-wrap items-center gap-2"><Search size={18} /><Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={`Search ${title.toLowerCase()}`} />{productList && <><select aria-label="Sort products" className="h-10 rounded-lg border border-line px-3 text-sm" value={sortBy} onChange={(event) => { setSortBy(event.target.value); setPage(1); }}><option value="updatedAt">Recently updated</option><option value="name">Name A?Z</option><option value="currentStock">Stock: high to low</option><option value="sellingPrice">Price: high to low</option></select><select aria-label="Stock status" className="h-10 rounded-lg border border-line px-3 text-sm" value={stockStatus} onChange={(event) => { setStockStatus(event.target.value); setPage(1); }}><option value="">All stock levels</option><option value="low">Low stock</option><option value="out">Out of stock</option></select></>}{(search || stockStatus) && <Button type="button" className="bg-slate-700" onClick={() => { setSearch(""); setStockStatus(""); setPage(1); }}>Clear filters</Button>}</div>
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          <Search size={18} />
+          <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={`Search ${title.toLowerCase()}`} />
+          {productList && <label className="flex items-center gap-2 text-sm font-medium text-slate-600 dark:text-slate-300">Sort by<select aria-label="Sort and filter products" className="h-10 rounded-lg border border-line bg-white px-3 text-sm font-normal text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100" value={stockStatus === "out" ? "outStock" : sortBy} onChange={(event) => { const value = event.target.value; if (value === "allStock") { setStockStatus(""); setSortBy("updatedAt"); } else if (value === "outStock") { setStockStatus("out"); setSortBy("updatedAt"); } else { setStockStatus(""); setSortBy(value); } setPage(1); }}><optgroup label="Sort by"><option value="updatedAt">Recently updated</option><option value="name">Name A–Z</option><option value="currentStock">Stock: high to low</option><option value="sellingPrice">Price: high to low</option></optgroup><optgroup label="Stock status"><option value="allStock">All stock</option><option value="outStock">Out of stock</option></optgroup></select></label>}
+        {productList && (search || stockStatus || sortBy !== "updatedAt") && <Button type="button" className="bg-slate-700" onClick={() => { setSearch(""); setStockStatus(""); setSortBy("updatedAt"); setPage(1); }}>Clear all</Button>}
+        </div>
         {salesList && <form className="mb-4 grid gap-3 rounded-lg border border-line p-3 dark:border-slate-700 sm:grid-cols-2 xl:grid-cols-5" onSubmit={(event) => {
           event.preventDefault();
           if (saleFrom && saleTo && saleFrom > saleTo) { toast.error("Start date must be before or equal to the end date"); return; }

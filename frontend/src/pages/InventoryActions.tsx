@@ -7,7 +7,7 @@ import { Input } from "../components/ui/Input";
 import { QueryState } from "../components/ui/QueryState";
 import { api, errorMessage, getAllProducts, getData } from "../services/api";
 import { useAuth } from "../contexts/AuthContext";
-import { peso } from "../lib/format";
+import { isMoneyInputWithinLimit, MAX_MONEY_INPUT, peso } from "../lib/format";
 import type { Product } from "../types/api";
 
 const selectClass = "mt-1 h-11 w-full rounded-lg border border-line px-3 text-sm dark:border-slate-700";
@@ -18,10 +18,11 @@ interface StockInLine {
   quantity: string;
   unitCost: string;
   sellingPrice: string;
+  expirationDate: string;
 }
 
 function emptyStockInLine(): StockInLine {
-  return { id: crypto.randomUUID(), productId: "", quantity: "1", unitCost: "", sellingPrice: "" };
+  return { id: crypto.randomUUID(), productId: "", quantity: "1", unitCost: "", sellingPrice: "", expirationDate: "" };
 }
 
 export function StockActions({ initialTab }: { initialTab?: "in" | "out" }) {
@@ -63,6 +64,7 @@ export function StockIn() {
         productId: item.productId,
         quantity: Number(item.quantity),
         unitCost: item.unitCost,
+        expirationDate: item.expirationDate || null,
         ...(canUpdateProduct && item.sellingPrice.trim() ? { sellingPrice: item.sellingPrice } : {})
       }))
     }),
@@ -87,7 +89,7 @@ export function StockIn() {
     mutation.mutate();
   }
 
-  return <Card className="mx-auto max-w-4xl"><h1 className="text-2xl font-bold">Stock-in</h1><p className="mt-1 text-sm text-slate-500">Record a supplier delivery. Add each received product once; stock and receipt history update together.</p>
+  return <Card className="mx-auto max-w-4xl"><h1 className="text-2xl font-bold">Stock-in</h1><p className="mt-1 text-sm text-slate-500">Record a supplier delivery. Add each received product once; stock and receipt history update together. Enter the printed expiration date when the item has one.</p>
     {suppliers.isError && <QueryState error onRetry={() => void suppliers.refetch()} />}
     {products.isError && <QueryState error onRetry={() => void products.refetch()} />}
     {suppliers.data && !suppliers.data.some((row) => row.status === "ACTIVE") && <p className="mt-4 rounded-lg bg-amber-50 p-3 text-sm text-amber-800">Add an active supplier before recording a delivery.</p>}
@@ -102,8 +104,9 @@ export function StockIn() {
           <div className="grid gap-3 sm:grid-cols-2">
             <label className="block text-sm font-medium">Product<select required disabled={products.isLoading || products.isError} className={selectClass} value={item.productId} onChange={(event) => setItems((rows) => rows.map((row) => row.id === item.id ? { ...row, productId: event.target.value, unitCost: "", sellingPrice: "" } : row))}><option value="">{products.isLoading ? "Loading products..." : "Select product"}</option>{choices.map((product) => <option key={product.id} value={product.id}>{product.name} — {product.currentStock} {product.unit} in stock</option>)}</select></label>
             <label className="block text-sm font-medium">Quantity received<Input required className="mt-1" type="number" min="1" step="1" value={item.quantity} onChange={(event) => setItems((rows) => rows.map((row) => row.id === item.id ? { ...row, quantity: event.target.value } : row))} /></label>
-            <label className="block text-sm font-medium">Unit cost (PHP)<Input required className="mt-1" type="number" min="0" step="0.01" value={item.unitCost} onChange={(event) => setItems((rows) => rows.map((row) => row.id === item.id ? { ...row, unitCost: event.target.value } : row))} /></label>
-            {canUpdateProduct && <label className="block text-sm font-medium">New selling price (PHP)<Input className="mt-1" type="number" min="0" step="0.01" placeholder="Leave blank to keep current price" value={item.sellingPrice} onChange={(event) => setItems((rows) => rows.map((row) => row.id === item.id ? { ...row, sellingPrice: event.target.value } : row))} /></label>}
+            <label className="block text-sm font-medium">Unit cost (PHP)<Input required className="mt-1" type="number" min="0" max={MAX_MONEY_INPUT} step="0.01" value={item.unitCost} onChange={(event) => { const value = event.target.value; if (isMoneyInputWithinLimit(value)) setItems((rows) => rows.map((row) => row.id === item.id ? { ...row, unitCost: value } : row)); }} /></label>
+            <label className="block text-sm font-medium">Expiration date (if applicable)<Input className="mt-1" type="date" value={item.expirationDate} onChange={(event) => setItems((rows) => rows.map((row) => row.id === item.id ? { ...row, expirationDate: event.target.value } : row))} /></label>
+            {canUpdateProduct && <label className="block text-sm font-medium">New selling price (PHP)<Input className="mt-1" type="number" min="0" max={MAX_MONEY_INPUT} step="0.01" placeholder="Leave blank to keep current price" value={item.sellingPrice} onChange={(event) => { const value = event.target.value; if (isMoneyInputWithinLimit(value)) setItems((rows) => rows.map((row) => row.id === item.id ? { ...row, sellingPrice: value } : row)); }} /></label>}
           </div>
         </div>;
       })}

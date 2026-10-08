@@ -5,6 +5,8 @@ import { asyncHandler } from "../utils/asyncHandler.js";
 import { created, ok } from "../utils/apiResponse.js";
 import { AppError } from "../utils/AppError.js";
 import { audit } from "../services/auditService.js";
+import * as customers from "../services/customerService.js";
+import { defaultLoyaltySettings, getLoyaltySettings, loyaltySettingKey, normalizeLoyaltySettings } from "../services/loyaltyService.js";
 import { paginationQuery } from "../validators/common.js";
 import * as catalog from "../services/catalogService.js";
 import { serializeForPermissions } from "../rbac/serializers.js";
@@ -32,6 +34,12 @@ async function generateUniqueSku(name: string, barcode: string) {
   return sku;
 }
 
+function assertCustomerPrices(sellingPrice: Prisma.Decimal | string | number, memberPrice?: Prisma.Decimal | string | number | null, wholesalePrice?: Prisma.Decimal | string | number | null) {
+  const retail = new Prisma.Decimal(sellingPrice);
+  if (memberPrice != null && new Prisma.Decimal(memberPrice).gt(retail)) throw new AppError("Member price cannot exceed the retail price.", 422);
+  if (wholesalePrice != null && new Prisma.Decimal(wholesalePrice).gt(retail)) throw new AppError("Wholesale price cannot exceed the retail price.", 422);
+}
+
 export const listProducts = asyncHandler(async (req: Request, res: Response) => {
   const status = typeof req.query.status === "string" ? req.query.status.toUpperCase() : undefined;
   if (status && status !== "ALL" && status !== ProductStatus.ACTIVE && status !== ProductStatus.ARCHIVED) {
@@ -54,6 +62,10 @@ export const listProducts = asyncHandler(async (req: Request, res: Response) => 
 });
 
 export const createProduct = asyncHandler(async (req: Request, res: Response) => {
+  if ((req.body.memberPrice != null || req.body.wholesalePrice != null) && !req.user?.permissions.includes("settings.update")) {
+    throw new AppError("Only authorized administrators can configure customer pricing.", 403);
+  }
+  assertCustomerPrices(req.body.sellingPrice, req.body.memberPrice, req.body.wholesalePrice);
   const existing = await prisma.product.findFirst({ where: { OR: [{ barcode: req.body.barcode }, { barcodes: { some: { code: req.body.barcode } } }] } });
   if (existing) throw new AppError("This barcode is already assigned to another product.", 409);
 
@@ -64,7 +76,7 @@ export const createProduct = asyncHandler(async (req: Request, res: Response) =>
 
   const product = await prisma.$transaction(async (tx) => {
     const createdProduct = await tx.product.create({
-      data: { ...req.body, sku, createdBy: req.user?.id ?? null },
+      data: { ...req.body, tracksExpiration: true, sku, createdBy: req.user?.id ?? null },
       include: { category: true, primarySupplier: true }
     });
     await tx.productBarcode.create({ data: { productId: createdProduct.id, code: createdProduct.barcode } });
@@ -93,6 +105,11 @@ export const getProduct = asyncHandler(async (req: Request, res: Response) => {
 export const updateProduct = asyncHandler(async (req: Request, res: Response) => {
   const old = await prisma.product.findUnique({ where: { id: req.params.id } });
   if (!old) throw new AppError("Product not found", 404);
+  const changesCustomerPricing = req.body.memberPrice !== undefined || req.body.wholesalePrice !== undefined || (req.body.wholesaleMinQuantity !== undefined && old.wholesalePrice !== null);
+  if (changesCustomerPricing && !req.user?.permissions.includes("settings.update")) {
+    throw new AppError("Only authorized administrators can configure customer pricing.", 403);
+  }
+  assertCustomerPrices(req.body.sellingPrice ?? old.sellingPrice, req.body.memberPrice === undefined ? old.memberPrice : req.body.memberPrice, req.body.wholesalePrice === undefined ? old.wholesalePrice : req.body.wholesalePrice);
   const product = await prisma.$transaction(async (tx) => {
     await tx.$queryRaw`SELECT id FROM "Product" WHERE id = ${req.params.id}::uuid FOR UPDATE`;
     const current = await tx.product.findUniqueOrThrow({ where: { id: req.params.id } });
@@ -106,7 +123,7 @@ export const updateProduct = asyncHandler(async (req: Request, res: Response) =>
       await tx.stockMovement.create({ data: { productId: current.id, employeeId: req.user.id, previousQuantity: current.currentStock, quantityChanged: req.body.currentStock - current.currentStock, newQuantity: req.body.currentStock, movementType: "ADJUSTMENT", referenceNo: `EDIT-${current.id}-${Date.now()}`, reason: "Product stock correction" } });
     }
     if (req.body.primarySupplierId) await tx.supplierProduct.upsert({ where: { supplierId_productId: { supplierId: req.body.primarySupplierId, productId: current.id } }, update: {}, create: { supplierId: req.body.primarySupplierId, productId: current.id } });
-    return tx.product.update({ where: { id: current.id }, data: req.body, include: { category: true, primarySupplier: true } });
+    return tx.product.update({ where: { id: current.id }, data: { ...req.body, tracksExpiration: true }, include: { category: true, primarySupplier: true } });
   });
   await audit({ userId: req.user?.id, action: "PRODUCT_UPDATE", module: "PRODUCTS", recordId: product.id, oldData: old, newData: product });
   return ok(res, "Product updated", serializeForPermissions(product, req.user?.permissions ?? []));
@@ -286,19 +303,91 @@ export const updateSupplier = asyncHandler(async (req: Request, res: Response) =
 });
 
 export const listCustomers = asyncHandler(async (req: Request, res: Response) => {
-  return ok(res, "Customers loaded", serializeForPermissions(await prisma.customer.findMany({ orderBy: { fullName: "asc" } }), req.user?.permissions ?? []));
+  const customerType = typeof req.query.customerType === "string" ? req.query.customerType : undefined;
+  if (customerType && !["Regular", "Member", "Wholesale", "Walk-in"].includes(customerType)) throw new AppError("Invalid customer type filter", 422);
+  const status = typeof req.query.status === "string" ? req.query.status.toUpperCase() : "ALL";
+  if (!(["ALL", "ACTIVE", "ARCHIVED"] as string[]).includes(status)) throw new AppError("Invalid customer status filter", 422);
+  const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
+  const phoneDigits = search.replace(/\D/g, "");
+  const where: Prisma.CustomerWhereInput = {
+    customerType: customerType === "Regular" ? { in: ["Regular", "Walk-in"] } : customerType,
+    status: status === "ALL" ? undefined : status as ProductStatus,
+    ...(search ? { OR: [
+      { fullName: { contains: search, mode: "insensitive" } },
+      { phone: { contains: search } },
+      ...(phoneDigits ? [{ phone: { contains: phoneDigits } }] : []),
+      { email: { contains: search, mode: "insensitive" } }
+    ] } : {})
+  };
+  const rows = await prisma.customer.findMany({
+    where,
+    include: {
+      _count: { select: { sales: { where: { status: { in: ["COMPLETED", "PARTIALLY_REFUNDED", "REFUNDED"] } } } } }
+    },
+    orderBy: { fullName: "asc" }
+  });
+  return ok(res, "Customers loaded", serializeForPermissions(rows.map(({ _count, ...customer }) => ({ ...customer, totalPurchases: _count.sales })), req.user?.permissions ?? []));
 });
 
 export const getCustomer = asyncHandler(async (req: Request, res: Response) => {
-  const customer = await prisma.customer.findUnique({ where: { id: req.params.id }, include: { sales: { include: { items: { include: { product: true } } }, orderBy: { createdAt: "desc" } } } });
+  const include: Prisma.CustomerInclude = { loyaltyTransactions: { orderBy: { createdAt: "desc" }, take: 100 } };
+  if (req.user?.permissions.includes("customers.view_purchase_history")) {
+    include.sales = { include: { items: { include: { product: true } }, refunds: { include: { items: true } }, payments: true }, orderBy: { createdAt: "desc" }, take: 100 };
+  }
+  const customer = await prisma.customer.findUnique({ where: { id: req.params.id }, include });
   if (!customer) throw new AppError("Customer not found", 404);
   return ok(res, "Customer loaded", serializeForPermissions(customer, req.user?.permissions ?? []));
 });
 
 export const createCustomer = asyncHandler(async (req: Request, res: Response) => {
-  return created(res, "Customer created", await prisma.customer.create({ data: req.body }));
+  const customer = await customers.createCustomer(req.body);
+  await audit({ userId: req.user?.id, action: "CUSTOMER_CREATE", module: "CUSTOMERS", recordId: customer.id, newData: customer });
+  return created(res, "Customer created", customer);
+});
+
+export const createAnonymousMember = asyncHandler(async (req: Request, res: Response) => {
+  const customer = await customers.createAnonymousMember();
+  await audit({ userId: req.user?.id, action: "CUSTOMER_ANONYMOUS_MEMBER_CREATE", module: "CUSTOMERS", recordId: customer.id, newData: customer });
+  return created(res, "Anonymous member loyalty account created", customer);
 });
 
 export const updateCustomer = asyncHandler(async (req: Request, res: Response) => {
-  return ok(res, "Customer updated", await prisma.customer.update({ where: { id: req.params.id }, data: req.body }));
+  const old = await prisma.customer.findUnique({ where: { id: req.params.id } });
+  if (!old) throw new AppError("Customer not found", 404);
+  if (req.body.customerType !== undefined && req.body.customerType !== old.customerType && !req.user?.permissions.includes("settings.update")) {
+    throw new AppError("Only authorized administrators can change customer types.", 403);
+  }
+  const customer = await customers.updateCustomer(req.params.id, req.body);
+  await audit({ userId: req.user?.id, action: "CUSTOMER_UPDATE", module: "CUSTOMERS", recordId: customer.id, oldData: old, newData: customer });
+  return ok(res, "Customer updated", customer);
+});
+
+export const updateCustomerStatus = asyncHandler(async (req: Request, res: Response) => {
+  const old = await prisma.customer.findUnique({ where: { id: req.params.id } });
+  if (!old) throw new AppError("Customer not found", 404);
+  const customer = await customers.setCustomerStatus(req.params.id, req.body.status as ProductStatus);
+  await audit({ userId: req.user?.id, action: "CUSTOMER_STATUS_UPDATE", module: "CUSTOMERS", recordId: customer.id, oldData: old, newData: customer });
+  return ok(res, "Customer status updated", customer);
+});
+
+export const adjustCustomerLoyaltyPoints = asyncHandler(async (req: Request, res: Response) => {
+  const result = await customers.adjustCustomerPoints(req.params.id, req.body.pointsDelta as number, req.body.reason as string);
+  await audit({ userId: req.user?.id, action: "CUSTOMER_LOYALTY_ADJUSTMENT", module: "CUSTOMERS", recordId: req.params.id, newData: result });
+  return created(res, "Customer points adjusted", result);
+});
+
+export const customerLoyaltySettings = asyncHandler(async (_req: Request, res: Response) => {
+  return ok(res, "Loyalty settings loaded", await getLoyaltySettings());
+});
+
+export const updateCustomerLoyaltySettings = asyncHandler(async (req: Request, res: Response) => {
+  const rules = normalizeLoyaltySettings(req.body);
+  const old = await prisma.systemSetting.findUnique({ where: { key: loyaltySettingKey } });
+  const setting = await prisma.systemSetting.upsert({
+    where: { key: loyaltySettingKey },
+    update: { value: rules as unknown as Prisma.InputJsonObject },
+    create: { key: loyaltySettingKey, value: rules as unknown as Prisma.InputJsonObject }
+  });
+  await audit({ userId: req.user?.id, action: "LOYALTY_SETTINGS_UPDATE", module: "CUSTOMERS", recordId: setting.id, oldData: old?.value ?? defaultLoyaltySettings, newData: rules });
+  return ok(res, "Loyalty settings saved", rules);
 });

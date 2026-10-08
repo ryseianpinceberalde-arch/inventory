@@ -21,9 +21,11 @@ The implementation is a single web application and API backed by one PostgreSQL 
 | --- | --- |
 | Identity and permissions | Users belong to roles. Effective permissions combine role grants and user-specific grants. Protected API routes enforce permissions. |
 | Catalog | Products are linked to categories and optionally to a primary supplier. Products can have additional barcode records and supplier relationships. Archived products are retained. |
+| Customer management | Registered customers have a stable UUID, required phone number, type, status, and purchase history. Anonymous member accounts have no contact details and use a generated customer UUID on an issued QR card. Phone numbers are normalized for duplicate checks. Customer records can be deactivated and retained with their sales history. |
 | Receiving and stock control | Stock receipts record supplier and received items. Stock-out and adjustments record reasons. Large adjustments require approval; smaller differences are approved automatically by the current rule. |
-| Point of sale | A sale contains line snapshots, a cashier, optional customer, payment records, and a unique receipt number. A cashier can hold and resume a cart. |
-| Refunds | Refunds reference the original sale and returned line items. Return condition determines whether units go back into stock. |
+| Point of sale | A sale contains line snapshots, a cashier, optional registered customer, payment records, and a unique receipt number. Walk-in checkout does not need a customer record. A cashier can hold and resume a cart. |
+| Customer pricing and loyalty | The API selects member or quantity-qualified wholesale prices from current product data. Members can redeem configured points, earn points from the paid total, and view a durable point ledger. |
+| Refunds | Refunds reference the original sale and returned line items. Return condition determines whether units go back into stock. Refunds reverse earned points and restore redeemed points proportionally. |
 | Notifications and audit | Inventory workflows create in-app alerts. Selected actions write audit entries with actor, action, record reference, and optional before/after data. |
 | Reports | The API aggregates persisted sales, refund, inventory, supplier, and employee data. The browser renders and exports report results. Business-date calculations use Asia/Manila. |
 
@@ -38,6 +40,9 @@ PostgreSQL is the persistent source of truth. The browser may hold a working POS
 - `StockReceipt` and its items preserve receipt-level supplier, cost, batch, and expiration information. `InventoryAdjustment` preserves the counted quantity, difference, request, and approval state.
 - When an adjustment difference is less than 10 units in absolute value, the current service approves it immediately. Larger differences remain pending. Approval checks that stock has not changed since the physical count and disallows self-approval.
 - Low-stock alerts are created when the resulting quantity is at or below the product's reorder level. They are stored as notifications, not sent through a separate messaging service.
+- The customer UUID is the unique customer ID used by sales and the customer page. Registration serializes attempts for the same normalized phone number and rejects duplicates. Deactivation retains the customer and all linked history.
+- Anonymous loyalty accounts are created as Member customers without name or contact details supplied by the customer. The generated account ID is encoded in a SmartStock QR card; POS scans resolve it to the active member account. The QR is a bearer card, so anyone presenting a copy can use that loyalty account.
+- Existing customer point balances are not rewritten by the customer-management migration. Historical sale awards and refund reversals are copied into the new ledger for visibility.
 
 ### Sales and refunds
 
@@ -46,6 +51,9 @@ PostgreSQL is the persistent source of truth. The browser may hold a working POS
 - A sale's idempotency key and receipt number are unique in the database. The sale service locks on the idempotency key, checks for a prior sale, and reuses the existing receipt for a same-cashier retry.
 - Product rows are locked while sale stock is checked and decremented. Sale, sale items, payment, stock updates, movements, and low-stock alerts are committed in one PostgreSQL transaction.
 - Refund processing locks the original sale, limits returned quantities to the amount sold, and writes refund and inventory changes in a transaction. Refunds marked "Return to inventory" increment stock; other conditions do not.
+- Products may have a member price and a wholesale price with a minimum quantity. Wholesale eligibility is checked per product line. The API reloads customer type and product prices and saves the applied unit price on each sale item.
+- Loyalty settings use the `loyalty_rules` system setting, defaulting to one point per PHP 100 and PHP 1 off per redeemed point. Only members earn or redeem. The customer row is locked during checkout, and the sale, point balance change, point ledger entry, payment, and inventory changes commit together. Unique sale and refund references prevent duplicate ledger entries.
+- A refund removes available points earned on returned units and restores redeemed points in proportion to the refunded paid amount. It does not drive the stored balance below zero. Point corrections commit with the refund.
 
 `ERD.md` is the detailed schema reference. Prisma schema constraints, foreign keys, and migrations enforce additional uniqueness and relationship rules.
 
@@ -55,9 +63,9 @@ PostgreSQL is the persistent source of truth. The browser may hold a working POS
 
 1. Validate the request shape, required payment fields, and unique product lines.
 2. For GCash, verify with PayMongo that the checkout is paid in PHP, belongs to the cashier, and matches the cart hash. For other methods, use the submitted tender amount subject to server-side validation.
-3. Start a PostgreSQL transaction. Lock by idempotency key and, when present, checkout session. Return the existing sale for a permitted retry or reject a reused provider payment.
-4. Lock product rows in a stable product-ID order; reload active product prices and available stock; compute line and sale totals on the server.
-5. Check tender and verified payment amount. Create the sale, item snapshots, payment, stock updates, movement records, and any low-stock notifications.
+3. Start a PostgreSQL transaction. Lock by idempotency key and, when present, checkout session. Return the existing sale for a permitted retry or reject a reused provider payment. Lock and reload the selected active customer so type, balance, and points cannot change midway through checkout.
+4. Lock product rows in a stable product-ID order; reload active product prices and available stock; apply the server-side member or wholesale price and compute line totals.
+5. Validate any member point redemption against the locked balance and eligible order total. Check tender and verified payment amount. Compute earned points from the amount due after discounts, then create the sale, price snapshots, payment, point ledger entry, stock updates, movements, and low-stock notifications.
 6. Commit the database transaction, then write the sale audit event from the controller.
 
 The database transaction prevents a partially recorded sale if one of its database writes fails. PayMongo is outside that transaction: a provider payment can succeed while the subsequent database operation fails. The current design verifies by API request and does not mount a webhook or automated payment-reconciliation worker.

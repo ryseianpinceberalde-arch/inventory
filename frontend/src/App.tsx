@@ -5,6 +5,7 @@ import { AppLayout } from "./components/layout/AppLayout";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
 import { ForgotPassword, ResetPassword } from "./pages/AuthUtility";
 import { Dashboard } from "./pages/Dashboard";
+import { CustomersPage } from "./pages/Customers";
 import { StockActions, InventoryAdjustment } from "./pages/InventoryActions";
 import { Login } from "./pages/Login";
 import { Notifications } from "./pages/Notifications";
@@ -59,8 +60,8 @@ export function App() {
               <Route path="/suppliers/:id" element={<PermissionRoute permission="suppliers.view"><Shell><ResourcePage title="Supplier profile" endpoint="/suppliers" columns={["name", "contactPerson", "phone", "email"]} /></Shell></PermissionRoute>} />
               <Route path="/supplier-deliveries" element={<PermissionRoute permission="inventory.movement_view"><Shell><ResourcePage title="Supplier deliveries" endpoint="/stock-movements" columns={["referenceNo", "product", "quantityChanged", "createdAt"]} /></Shell></PermissionRoute>} />
               <Route path="/supplier-performance" element={<PermissionRoute permission="reports.supplier_performance"><Shell><ResourcePage title="Supplier performance" endpoint="/supplier-performance" columns={["supplier", "completedDeliveries", "onTimeRate", "performanceScore"]} /></Shell></PermissionRoute>} />
-              <Route path="/customers" element={<PermissionRoute permission="customers.view"><Shell><ResourcePage title="Customers" endpoint="/customers" columns={["fullName", "phone", "email", "customerType", "loyaltyPoints"]} /></Shell></PermissionRoute>} />
-              <Route path="/customers/:id" element={<PermissionRoute permission="customers.view"><Shell><ResourcePage title="Customer profile" endpoint="/customers" columns={["fullName", "phone", "email", "customerType"]} /></Shell></PermissionRoute>} />
+              <Route path="/customers" element={<PermissionRoute permission="customers.view"><Shell><CustomersPage /></Shell></PermissionRoute>} />
+              <Route path="/customers/:id" element={<PermissionRoute permission="customers.view"><Shell><CustomersPage /></Shell></PermissionRoute>} />
               <Route path="/employees" element={<PermissionRoute permission="users.view"><Shell><ResourcePage title="Employees" endpoint="/users" columns={["fullName", "email", "role", "status"]} /></Shell></PermissionRoute>} />
               <Route path="/users" element={<PermissionRoute permission="users.view"><Shell><ResourcePage title="Users" endpoint="/users" columns={["fullName", "email", "role", "status"]} /></Shell></PermissionRoute>} />
               <Route path="/roles" element={<PermissionRoute permission="roles.view"><Shell><RoleManagement /></Shell></PermissionRoute>} />

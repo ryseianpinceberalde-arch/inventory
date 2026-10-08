@@ -101,11 +101,11 @@ async function main() {
   log("Creating users...");
   const roleByName = Object.fromEntries(roles.map((role) => [role.name, role.id])) as Record<RoleName, string>;
   const users = [
-    ["Admin User", "admin@smartstock.local", "Admin123!", RoleName.ADMIN],
-    ["Store Manager", "manager@smartstock.local", "Manager123!", RoleName.MANAGER],
-    ["Cashier One", "cashier@smartstock.local", "Cashier123!", RoleName.CASHIER],
-    ["Cashier Two", "cashier2@smartstock.local", "Cashier123!", RoleName.CASHIER],
-    ["Inventory Staff", "inventory@smartstock.local", "Inventory123!", RoleName.INVENTORY_STAFF]
+    ["Grace Velasco", "admin@smartstock.local", "Admin123!", RoleName.ADMIN],
+    ["Rafael Dela Cruz", "manager@smartstock.local", "Manager123!", RoleName.MANAGER],
+    ["Mika Santiago", "cashier@smartstock.local", "Cashier123!", RoleName.CASHIER],
+    ["Ethan Romero", "cashier2@smartstock.local", "Cashier123!", RoleName.CASHIER],
+    ["Noel Bautista", "inventory@smartstock.local", "Inventory123!", RoleName.INVENTORY_STAFF]
   ] as const;
   for (const [fullName, email, password, role] of users) {
     await prisma.user.upsert({
@@ -124,49 +124,111 @@ async function main() {
 
   log("Creating suppliers...");
   const supplierIds = Array.from({ length: 10 }, (_, index) => `00000000-0000-0000-0000-${String(index + 1).padStart(12, "0")}`);
+  const supplierNames = [
+    "Metro Manila Beverage Supply",
+    "Luzon Snack Distributors",
+    "Prime Canned Goods Trading",
+    "Everyday Personal Care Supply",
+    "South Metro Household Goods",
+    "FreshMart Wholesale Center",
+    "Islandwide Consumer Products",
+    "Golden Basket Trading",
+    "Sunrise Retail Distributors",
+    "Cityline General Merchandise"
+  ];
+  const contactNames = ["Maria Santos", "Jose Reyes", "Angela Cruz", "Miguel Ramos", "Leah Garcia", "Daniel Lim", "Sofia Mendoza", "Carlo Bautista", "Nina Flores", "Paolo Navarro"];
+  const supplierLocations = ["Quezon City", "Manila", "Pasig City", "Makati City", "Parañaque City", "Taguig City", "Caloocan City", "Mandaluyong City", "Marikina City", "Las Piñas City"];
   for (let i = 1; i <= 10; i += 1) {
     await prisma.supplier.upsert({
       where: { id: supplierIds[i - 1] },
-      update: {},
-      create: {
-        id: supplierIds[i - 1],
-        name: `Supplier ${i}`,
-        contactPerson: `Contact ${i}`,
+      update: {
+        name: supplierNames[i - 1],
+        contactPerson: contactNames[i - 1],
         phone: `091700000${String(i).padStart(2, "0")}`,
         email: `supplier${i}@example.com`,
-        address: `Metro Manila ${i}`,
+        address: `${supplierLocations[i - 1]}, Metro Manila`,
+        notes: "Demo supplier for sample inventory data"
+      },
+      create: {
+        id: supplierIds[i - 1],
+        name: supplierNames[i - 1],
+        contactPerson: contactNames[i - 1],
+        phone: `091700000${String(i).padStart(2, "0")}`,
+        email: `supplier${i}@example.com`,
+        address: `${supplierLocations[i - 1]}, Metro Manila`,
         paymentTerms: "Net 30",
         deliveryLeadTime: 3 + (i % 5),
-        notes: "Seed supplier"
+        notes: "Demo supplier for sample inventory data"
       }
     });
   }
-  const supplierRows = await prisma.supplier.findMany({ where: { id: { in: supplierIds } } });
+  const supplierRows = await prisma.supplier.findMany({ where: { id: { in: supplierIds } }, orderBy: { id: "asc" } });
   const admin = await prisma.user.findUniqueOrThrow({ where: { email: "admin@smartstock.local" } });
   const cashier = await prisma.user.findUniqueOrThrow({ where: { email: "cashier@smartstock.local" } });
 
   log("Creating products...");
-  for (let i = 1; i <= 30; i += 1) {
-    const category = categoryRows[i % categoryRows.length];
+  const demoProducts = [
+    { name: "Coca-Cola Original 1.5 L", category: "Beverages" },
+    { name: "Pepsi Cola 1.5 L", category: "Beverages" },
+    { name: "Wilkins Distilled Water 1 L", category: "Beverages" },
+    { name: "Nescafe Classic Coffee 100 g", category: "Beverages" },
+    { name: "Bear Brand Fortified Milk 300 g", category: "Beverages" },
+    { name: "Minute Maid Orange Juice 1 L", category: "Beverages" },
+    { name: "Piattos Cheese Chips 85 g", category: "Snacks" },
+    { name: "Oishi Prawn Crackers 60 g", category: "Snacks" },
+    { name: "Oreo Original Cookies 133 g", category: "Snacks" },
+    { name: "SkyFlakes Crackers 10-pack", category: "Snacks" },
+    { name: "Nova Country Cheddar 78 g", category: "Snacks" },
+    { name: "Rebisco Cream Sandwich 10-pack", category: "Snacks" },
+    { name: "Century Tuna Flakes in Oil 180 g", category: "Canned Goods" },
+    { name: "Argentina Corned Beef 260 g", category: "Canned Goods" },
+    { name: "Mega Sardines Tomato Sauce 155 g", category: "Canned Goods" },
+    { name: "555 Spanish Sardines 155 g", category: "Canned Goods" },
+    { name: "Del Monte Whole Kernel Corn 425 g", category: "Canned Goods" },
+    { name: "San Marino Corned Tuna 180 g", category: "Canned Goods" },
+    { name: "Safeguard Pure White Soap 135 g", category: "Personal Care" },
+    { name: "Colgate Total Toothpaste 150 g", category: "Personal Care" },
+    { name: "Head & Shoulders Cool Menthol Shampoo 170 ml", category: "Personal Care" },
+    { name: "Palmolive Naturals Conditioner 180 ml", category: "Personal Care" },
+    { name: "Human Nature Hand Sanitizer 50 ml", category: "Personal Care" },
+    { name: "Sunsilk Smooth & Manageable Shampoo 180 ml", category: "Personal Care" },
+    { name: "Ariel Sunrise Fresh Detergent 1 kg", category: "Household" },
+    { name: "Joy Lemon Dishwashing Liquid 485 ml", category: "Household" },
+    { name: "Zonrox Original Bleach 1 L", category: "Household" },
+    { name: "Scotch-Brite Scrub Sponge", category: "Household" },
+    { name: "Glad Cling Wrap 30 m", category: "Household" },
+    { name: "Champion Detergent Powder 1 kg", category: "Household" }
+  ];
+  const categoriesByName = new Map(categoryRows.map((category) => [category.name, category]));
+  for (const [index, sample] of demoProducts.entries()) {
+    const i = index + 1;
+    const category = categoriesByName.get(sample.category);
+    if (!category) throw new Error(`Demo category not found: ${sample.category}`);
     const supplier = supplierRows[i % supplierRows.length];
     const sku = `SKU-${String(i).padStart(4, "0")}`;
     const barcode = `480000000${String(i).padStart(3, "0")}`;
     const product = await prisma.product.upsert({
       where: { sku },
-      update: {},
+      update: {
+        name: sample.name,
+        categoryId: category.id,
+        primarySupplierId: supplier.id,
+        description: `${sample.name} - demo catalog sample`,
+        tracksExpiration: true
+      },
       create: {
-        name: `${category.name} Item ${i}`,
+        name: sample.name,
         sku,
         barcode,
         categoryId: category.id,
         primarySupplierId: supplier.id,
-        description: `Seed product ${i}`,
+        description: `${sample.name} - demo catalog sample`,
         costPrice: new Prisma.Decimal(20 + i),
         sellingPrice: new Prisma.Decimal(35 + i),
         currentStock: 20 + i,
         reorderLevel: 10,
         unit: "pcs",
-        tracksExpiration: i % 3 === 0,
+        tracksExpiration: true,
         createdBy: admin.id
       }
     });
@@ -179,16 +241,29 @@ async function main() {
   }
 
   log("Creating customers...");
+  const sampleCustomerNames = [
+    "Ana Reyes", "Marco Santos", "Liza Cruz", "Paolo Garcia", "Bea Ramos", "Miguel Mendoza", "Sofia Aquino",
+    "Carlo Bautista", "Janelle Flores", "Nico Villanueva", "Mia Navarro", "Enzo Castillo", "Camille Torres",
+    "Rafael Lim", "Trisha Gonzales", "Daniela Rivera", "Luis Mercado", "Patricia Dizon", "Gabriel Fernandez"
+  ];
   for (let i = 1; i <= 20; i += 1) {
+    const fullName = i === 1 ? "Walk-in Customer" : sampleCustomerNames[i - 2];
+    const customerId = `10000000-0000-0000-0000-${String(i).padStart(12, "0")}`;
     await prisma.customer.upsert({
-      where: { id: `10000000-0000-0000-0000-${String(i).padStart(12, "0")}` },
-      update: {},
-      create: {
-        id: `10000000-0000-0000-0000-${String(i).padStart(12, "0")}`,
-        fullName: i === 1 ? "Walk-in Customer" : `Customer ${i}`,
+      where: { id: customerId },
+      update: {
+        fullName,
         phone: `092700000${String(i).padStart(2, "0")}`,
         email: `customer${i}@example.com`,
-        customerType: i % 4 === 0 ? "Wholesale" : i % 3 === 0 ? "Member" : "Regular",
+        customerType: i === 1 ? "Walk-in" : i % 4 === 0 ? "Wholesale" : i % 3 === 0 ? "Member" : "Regular",
+        loyaltyPoints: i * 5
+      },
+      create: {
+        id: customerId,
+        fullName,
+        phone: `092700000${String(i).padStart(2, "0")}`,
+        email: `customer${i}@example.com`,
+        customerType: i === 1 ? "Walk-in" : i % 4 === 0 ? "Wholesale" : i % 3 === 0 ? "Member" : "Regular",
         loyaltyPoints: i * 5
       }
     });
@@ -196,7 +271,7 @@ async function main() {
 
   log("Creating supplier deliveries...");
   const products = await prisma.product.findMany({ where: { sku: { startsWith: "SKU-" } }, take: 10, orderBy: { sku: "asc" } });
-  const customer = await prisma.customer.findFirstOrThrow({ where: { fullName: "Walk-in Customer" } });
+  const customer = await prisma.customer.findUniqueOrThrow({ where: { id: "10000000-0000-0000-0000-000000000002" } });
   await prisma.supplierEvaluation.deleteMany({ where: { supplierId: { in: supplierIds } } });
   for (let i = 1; i <= 5; i += 1) {
     const supplier = supplierRows[i % supplierRows.length];
@@ -242,7 +317,7 @@ async function main() {
     const profit = product.sellingPrice.sub(product.costPrice).mul(quantity);
     await prisma.sale.upsert({
       where: { receiptNo: `RCP-${String(i).padStart(5, "0")}` },
-      update: {},
+      update: { customerId: customer.id, cashierId: cashier.id },
       create: {
         receiptNo: `RCP-${String(i).padStart(5, "0")}`,
         customerId: customer.id,

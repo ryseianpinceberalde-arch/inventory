@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AxiosError } from "axios";
-import { Camera, Pause, Printer, Search, Trash2, Wallet, X } from "lucide-react";
+import { Camera, Pause, Printer, QrCode, Search, Trash2, Wallet, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import { useNavigate, useSearchParams } from "react-router-dom";
@@ -13,7 +13,7 @@ import { QueryState } from "../components/ui/QueryState";
 import { useAuth } from "../contexts/AuthContext";
 import { api, getData, getAllProducts } from "../services/api";
 import type { ApiResponse, BarcodeLookupResult, ExternalProductDraft, Product, Sale } from "../types/api";
-import { peso } from "../lib/format";
+import { MAX_MONEY_AMOUNT, MAX_MONEY_INPUT, peso } from "../lib/format";
 
 interface CartLine {
   product: Product;
@@ -47,6 +47,7 @@ interface PendingPayMongoCheckout {
   amountPaid: string;
   idempotencyKey: string;
   customerId?: string | null;
+  loyaltyPointsRedeemed: number;
   cart: CartLine[];
 }
 
@@ -55,12 +56,29 @@ interface PosCustomer {
   fullName: string;
   phone?: string | null;
   loyaltyPoints: number;
+  customerType: string;
   status: string;
+}
+
+interface LoyaltySettings {
+  earningSpend: number;
+  redemptionValue: number;
+}
+
+function customerPrice(product: Product, customerType: string | undefined, quantity: number) {
+  if (customerType === "Wholesale" && product.wholesalePrice && quantity >= (product.wholesaleMinQuantity ?? 10)) return Number(product.wholesalePrice);
+  if (customerType === "Member" && product.memberPrice) return Number(product.memberPrice);
+  return Number(product.sellingPrice);
 }
 
 const posCartStorageKey = "smartstock.pos.cart";
 const pendingPayMongoStorageKey = "smartstock.pos.paymongo.pending";
 const duplicateScanWindowMs = 700;
+
+function memberIdFromQrCode(value: string) {
+  const match = value.trim().match(/^(?:SMARTSTOCK:MEMBER:)?([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i);
+  return match?.[1]?.toLowerCase() ?? "";
+}
 
 export function POS() {
   const queryClient = useQueryClient();
@@ -83,6 +101,7 @@ export function POS() {
   });
   const [amountPaid, setAmountPaid] = useState("");
   const [customerId, setCustomerId] = useState("");
+  const [loyaltyPointsRedeemed, setLoyaltyPointsRedeemed] = useState(0);
   const [customerSearch, setCustomerSearch] = useState("");
   const [completedSale, setCompletedSale] = useState<Sale | null>(null);
   const scannerInputRef = useRef<HTMLInputElement>(null);
@@ -95,23 +114,37 @@ export function POS() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { data: products = [], isLoading: productsLoading, isError: productsError, refetch: refetchProducts } = useQuery({ queryKey: ["products-pos"], queryFn: () => getAllProducts<Product>() });
   const { data: customers = [], isLoading: customersLoading } = useQuery({ queryKey: ["customers-pos"], queryFn: () => getData<PosCustomer[]>("/customers"), enabled: hasPermission("customers.view") });
+  const { data: loyaltySettings } = useQuery({ queryKey: ["/customers/loyalty-settings"], queryFn: () => getData<LoyaltySettings>("/customers/loyalty-settings"), enabled: hasPermission("customers.view") });
   const { data: heldSales = [] } = useQuery({ queryKey: ["held-sales"], queryFn: () => getData<HeldSale[]>("/held-sales"), enabled: hasPermission("sales.resume") });
+  const [isMemberQrOpen, setIsMemberQrOpen] = useState(false);
   const filteredProducts = useMemo(() => {
     const term = search.trim().toLowerCase();
     if (!term) return products;
     return products.filter((product) => [product.name, product.sku, product.barcode].some((value) => value.toLowerCase().includes(term)));
   }, [products, search]);
   const totals = useMemo(() => {
-    const subtotal = cart.reduce((sum, line) => sum + Number(line.product.sellingPrice) * line.quantity - line.productDiscount, 0);
-    return { subtotal, total: subtotal, change: Math.max(Number(amountPaid || 0) - subtotal, 0) };
-  }, [amountPaid, cart]);
+    const subtotal = cart.reduce((sum, line) => sum + customerPrice(line.product, customers.find((customer) => customer.id === customerId)?.customerType, line.quantity) * line.quantity - line.productDiscount, 0);
+    const redemptionValue = loyaltySettings?.redemptionValue ?? 1;
+    const customer = customers.find((row) => row.id === customerId);
+    const pointsDiscount = customer?.customerType === "Member" ? Math.min(loyaltyPointsRedeemed, customer.loyaltyPoints, Math.floor((subtotal + 1e-8) / redemptionValue)) * redemptionValue : 0;
+    return { subtotal, pointsDiscount, total: Math.max(0, subtotal - pointsDiscount), change: Math.max(Number(amountPaid || 0) - Math.max(0, subtotal - pointsDiscount), 0) };
+  }, [amountPaid, cart, customers, customerId, loyaltyPointsRedeemed, loyaltySettings]);
+  const exceedsMoneyLimit = Number(amountPaid) > MAX_MONEY_AMOUNT;
   const selectedCustomer = customers.find((customer) => customer.id === customerId);
-  const pointsToEarn = customerId ? cart.reduce((sum, line) => sum + line.quantity, 0) : 0;
+  const redemptionValue = loyaltySettings?.redemptionValue ?? 1;
+  const maxPointsToRedeem = selectedCustomer?.customerType === "Member" && redemptionValue > 0
+    ? Math.min(selectedCustomer.loyaltyPoints, Math.floor((totals.subtotal + 1e-8) / redemptionValue))
+    : 0;
+  const pointsToRedeem = Math.min(loyaltyPointsRedeemed, maxPointsToRedeem);
+  const pointsToEarn = selectedCustomer?.customerType === "Member"
+    ? Math.floor((Math.round(totals.total * 100) / 100) / (loyaltySettings?.earningSpend ?? 100))
+    : 0;
   const customerSearchTerm = customerSearch.trim().toLowerCase();
   const customerSearchDigits = customerSearch.replace(/\D/g, "");
   const matchingCustomers = customerSearchTerm
     ? customers.filter((customer) => customer.status === "ACTIVE" && (
       customer.fullName.toLowerCase().includes(customerSearchTerm) ||
+      customer.id.toLowerCase().includes(memberIdFromQrCode(customerSearch) || customerSearchTerm) ||
       Boolean(customerSearchDigits && customer.phone?.replace(/\D/g, "").includes(customerSearchDigits))
     )).slice(0, 8)
     : [];
@@ -134,8 +167,8 @@ export function POS() {
   }
 
   const saleMutation = useMutation({
-    mutationFn: async (input: { paymentMethod: "CASH" | "GCASH"; amountPaid: string; idempotencyKey: string; checkoutSessionId?: string; customerId?: string; items: CartLine[] }) => {
-      const total = input.items.reduce((sum, line) => sum + Number(line.product.sellingPrice) * line.quantity - line.productDiscount, 0);
+    mutationFn: async (input: { paymentMethod: "CASH" | "GCASH"; amountPaid: string; idempotencyKey: string; checkoutSessionId?: string; customerId?: string; loyaltyPointsRedeemed: number; items: CartLine[] }) => {
+      const total = input.items.reduce((sum, line) => sum + customerPrice(line.product, selectedCustomer?.customerType, line.quantity) * line.quantity - line.productDiscount, 0) - input.loyaltyPointsRedeemed * redemptionValue;
       if (Number(input.amountPaid || 0) < total) throw new Error("Amount paid is below total");
       const response = await api.post<ApiResponse<Sale>>("/sales", {
         receiptNo: `RCP-${Date.now()}`,
@@ -145,6 +178,7 @@ export function POS() {
         idempotencyKey: input.idempotencyKey,
         checkoutSessionId: input.checkoutSessionId,
         customerId: input.customerId || null,
+        loyaltyPointsRedeemed: input.loyaltyPointsRedeemed,
         items: input.items.map((line) => ({ productId: line.product.id, quantity: line.quantity, productDiscount: String(line.productDiscount) }))
       });
       return response.data.data;
@@ -155,11 +189,13 @@ export function POS() {
       setCompletedSale(sale);
       setCart([]);
       setCustomerId("");
+      setLoyaltyPointsRedeemed(0);
       setAmountPaid("");
       sessionStorage.removeItem(posCartStorageKey);
       sessionStorage.removeItem(pendingPayMongoStorageKey);
       await queryClient.invalidateQueries({ queryKey: ["products-pos"] });
       await queryClient.invalidateQueries({ queryKey: ["customers-pos"] });
+      await queryClient.invalidateQueries({ predicate: (query) => typeof query.queryKey[0] === "string" && query.queryKey[0].startsWith("/customers") });
       await queryClient.invalidateQueries({ queryKey: ["dashboard"] });
     },
     onError: (error) => {
@@ -173,6 +209,8 @@ export function POS() {
       const response = await api.post<ApiResponse<PayMongoCheckout>>("/paymongo/gcash-checkout", {
         successUrl: `${window.location.origin}/pos?paymongoResult=success`,
         cancelUrl: `${window.location.origin}/pos?paymongoResult=cancelled`,
+        customerId: customerId || null,
+        loyaltyPointsRedeemed: pointsToRedeem,
         items: cart.map((line) => ({ productId: line.product.id, quantity: line.quantity, productDiscount: String(line.productDiscount) }))
       });
       return response.data.data;
@@ -183,6 +221,7 @@ export function POS() {
         amountPaid: String(checkout.amount),
         idempotencyKey: crypto.randomUUID(),
         customerId: customerId || null,
+        loyaltyPointsRedeemed: pointsToRedeem,
         cart
       };
       sessionStorage.setItem(posCartStorageKey, JSON.stringify(cart));
@@ -205,6 +244,7 @@ export function POS() {
       toast.success("Order held");
       setCart([]);
       setCustomerId("");
+      setLoyaltyPointsRedeemed(0);
       setAmountPaid("");
       sessionStorage.removeItem(posCartStorageKey);
       await queryClient.invalidateQueries({ queryKey: ["held-sales"] });
@@ -288,6 +328,23 @@ export function POS() {
     }
   }, [addProduct, search]);
 
+  function selectMemberFromQr(value: string, fromCamera = false) {
+    const id = memberIdFromQrCode(value);
+    if (!id && !fromCamera && !value.trim().toUpperCase().startsWith("SMARTSTOCK:")) return;
+    const customer = id
+      ? customers.find((row) => row.id.toLowerCase() === id && row.status === "ACTIVE" && row.customerType === "Member")
+      : undefined;
+    setIsMemberQrOpen(false);
+    setCustomerSearch("");
+    if (!customer) {
+      toast.error("That QR code is not an active SmartStock member card.");
+      return;
+    }
+    setCustomerId(customer.id);
+    setLoyaltyPointsRedeemed(0);
+    toast.success(`${customer.fullName} selected`);
+  }
+
   function reviewExternalProduct(product: ExternalProductDraft) {
     const params = new URLSearchParams({
       barcode: product.barcode,
@@ -315,15 +372,20 @@ export function POS() {
       await removeHeldMutation.mutateAsync(heldSale.id);
       setCart(heldSale.items.map((item) => ({ product: item.product, quantity: item.quantity, productDiscount: Number(item.discount) })));
       setCustomerId(heldSale.customerId ?? "");
+      setLoyaltyPointsRedeemed(0);
       setAmountPaid("");
       toast.success("Held order resumed");
     } catch { /* The mutation displays the error and preserves the current cart. */ }
   }
 
   function checkoutCash() {
-    const signature = JSON.stringify({ cart, amountPaid });
+    if (exceedsMoneyLimit) {
+      toast.error(`Amount received cannot exceed ${peso(MAX_MONEY_AMOUNT)}.`);
+      return;
+    }
+    const signature = JSON.stringify({ cart, amountPaid, customerId, pointsToRedeem });
     if (cashAttempt.current?.signature !== signature) cashAttempt.current = { signature, key: crypto.randomUUID() };
-    saleMutation.mutate({ paymentMethod: "CASH", amountPaid, idempotencyKey: cashAttempt.current.key, customerId: customerId || undefined, items: cart });
+    saleMutation.mutate({ paymentMethod: "CASH", amountPaid, idempotencyKey: cashAttempt.current.key, customerId: customerId || undefined, loyaltyPointsRedeemed: pointsToRedeem, items: cart });
   }
 
   function checkoutGcash() {
@@ -380,6 +442,19 @@ export function POS() {
   }, [scan, searchParams, setSearchParams]);
 
   useEffect(() => {
+    const selectedId = searchParams.get("customerId");
+    if (!selectedId || customersLoading) return;
+    const customer = customers.find((row) => row.id === selectedId && row.status === "ACTIVE");
+    if (!customer) return;
+    setCustomerId(customer.id);
+    setLoyaltyPointsRedeemed(0);
+    setCustomerSearch("");
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.delete("customerId");
+    setSearchParams(nextParams, { replace: true });
+  }, [customers, customersLoading, searchParams, setSearchParams]);
+
+  useEffect(() => {
     const result = searchParams.get("paymongoResult");
     if (!result || processingPayMongoReturnRef.current) return;
     processingPayMongoReturnRef.current = true;
@@ -412,7 +487,7 @@ export function POS() {
         }
         setCart(pending.cart);
         setCustomerId(pending.customerId ?? "");
-        saleMutation.mutate({ paymentMethod: "GCASH", amountPaid: pending.amountPaid, idempotencyKey: pending.idempotencyKey, checkoutSessionId: pending.checkoutSessionId, customerId: pending.customerId ?? undefined, items: pending.cart });
+        saleMutation.mutate({ paymentMethod: "GCASH", amountPaid: pending.amountPaid, idempotencyKey: pending.idempotencyKey, checkoutSessionId: pending.checkoutSessionId, customerId: pending.customerId ?? undefined, loyaltyPointsRedeemed: pending.loyaltyPointsRedeemed ?? 0, items: pending.cart });
       } catch (error) {
         const message = error instanceof AxiosError ? error.response?.data?.message : undefined;
         toast.error(message ?? "Could not verify GCash payment.");
@@ -465,7 +540,7 @@ export function POS() {
         </Card>
         <Card>
           <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {filteredProducts.map((product) => <button key={product.id} className="rounded-md border border-line p-3 text-left hover:border-brand disabled:cursor-not-allowed disabled:opacity-50" disabled={product.currentStock < 1} onClick={() => addProduct(product)}><div className="font-semibold">{product.name}</div><div className="text-sm text-slate-500">{product.sku} | {product.barcode}</div><div className="mt-2 flex justify-between text-sm"><span>{peso(product.sellingPrice)}</span><span>{product.currentStock} {product.unit}</span></div></button>)}
+            {filteredProducts.map((product) => <button key={product.id} className="rounded-md border border-line p-3 text-left hover:border-brand disabled:cursor-not-allowed disabled:opacity-50" disabled={product.currentStock < 1} onClick={() => addProduct(product)}><div className="font-semibold">{product.name}</div><div className="text-sm text-slate-500">{product.sku} | {product.barcode}</div><div className="mt-2 flex justify-between text-sm"><span>{peso(customerPrice(product, selectedCustomer?.customerType, 1))}</span><span>{product.currentStock} {product.unit}</span></div></button>)}
           </div>
         </Card>
       </div>
@@ -477,21 +552,27 @@ export function POS() {
         <div className="mt-4 space-y-2">
           {cart.length === 0 && <p className="text-sm text-slate-500">No items in cart.</p>}
           {hasPermission("customers.view") && <div className="space-y-2">
-            <span className="block text-sm font-medium">Customer (optional)</span>
+            <span className="block text-sm font-medium">Customer · walk-in checkout is available</span>
             {selectedCustomer ? <div className="flex items-center justify-between gap-2 rounded-md border border-teal-200 bg-teal-50 p-3 text-sm text-teal-900 dark:border-teal-900 dark:bg-teal-950 dark:text-teal-200">
-              <div><strong>{selectedCustomer.fullName}</strong><div className="text-xs">{selectedCustomer.phone || "No phone number"} · {selectedCustomer.loyaltyPoints} points · earns {pointsToEarn} this sale</div></div>
-              <Button type="button" className="h-8 bg-slate-700 px-3 text-xs" onClick={() => setCustomerId("")}>Change</Button>
+              <div><strong>{selectedCustomer.fullName}</strong><div className="text-xs">{selectedCustomer.phone || "No phone number"} · {selectedCustomer.customerType} · {selectedCustomer.loyaltyPoints} points · earns {pointsToEarn} this sale</div></div>
+              <Button type="button" className="h-8 bg-slate-700 px-3 text-xs" onClick={() => { setCustomerId(""); setLoyaltyPointsRedeemed(0); }}>Change</Button>
             </div> : <>
-              <Input aria-label="Find customer by name or phone" autoComplete="off" value={customerSearch} onChange={(event) => setCustomerSearch(event.target.value)} placeholder={customersLoading ? "Loading customers..." : "Search customer by name or phone"} />
+              <div className="flex gap-2">
+                <Input aria-label="Find customer by name, phone, or loyalty QR" autoComplete="off" value={customerSearch} onChange={(event) => setCustomerSearch(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); selectMemberFromQr(customerSearch); } }} placeholder={customersLoading ? "Loading customers..." : "Search customer or scan loyalty QR"} />
+                <Button type="button" className="shrink-0 bg-slate-700 px-3" aria-label="Scan member loyalty QR" disabled={customersLoading} onClick={() => setIsMemberQrOpen((open) => !open)}><QrCode size={17} /> Scan QR</Button>
+              </div>
+              {isMemberQrOpen && <div className="mt-3 max-w-md"><CameraBarcodeScanner compact qrOnly onClose={() => setIsMemberQrOpen(false)} onScan={(value) => selectMemberFromQr(value, true)} /></div>}
               {customerSearchTerm && <div className="max-h-56 overflow-y-auto rounded-md border border-line dark:border-slate-700">
-                {matchingCustomers.length > 0 ? matchingCustomers.map((customer) => <button key={customer.id} type="button" className="flex w-full items-center justify-between gap-3 border-b border-line px-3 py-2 text-left text-sm last:border-b-0 hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800" onClick={() => { setCustomerId(customer.id); setCustomerSearch(""); }}>
-                  <span><strong className="block">{customer.fullName}</strong><span className="text-xs text-slate-500">{customer.phone || "No phone number"}</span></span><span className="shrink-0 text-xs">{customer.loyaltyPoints} pts</span>
-                </button>) : <div className="p-3 text-sm text-slate-500">No active customer found. {hasPermission("customers.create") && <button type="button" className="font-medium text-brand underline" onClick={() => navigate("/customers")}>Add customer</button>}</div>}
+                {matchingCustomers.length > 0 ? matchingCustomers.map((customer) => <button key={customer.id} type="button" className="flex w-full items-center justify-between gap-3 border-b border-line px-3 py-2 text-left text-sm last:border-b-0 hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800" onClick={() => { setCustomerId(customer.id); setLoyaltyPointsRedeemed(0); setCustomerSearch(""); }}>
+                  <span><strong className="block">{customer.fullName}</strong><span className="text-xs text-slate-500">{customer.phone || "No phone number"} · {customer.customerType}</span></span><span className="shrink-0 text-xs">{customer.loyaltyPoints} pts</span>
+                </button>) : <div className="p-3 text-sm text-slate-500">No active customer found. {hasPermission("customers.create") && <button type="button" className="font-medium text-brand underline" onClick={() => navigate("/customers?returnTo=pos")}>Add customer</button>}</div>}
               </div>}
-              {!customerId && <button type="button" className="text-xs text-slate-500 underline" onClick={() => setCustomerSearch("")}>Continue as walk-in (no points)</button>}
+              {hasPermission("customers.create") && <button type="button" className="text-xs font-medium text-brand underline" onClick={() => navigate("/customers?returnTo=pos")}>Add new customer</button>}
+              {!customerId && <button type="button" className="ml-3 text-xs text-slate-500 underline" onClick={() => { setCustomerSearch(""); setLoyaltyPointsRedeemed(0); }}>Walk-in customer · retail pricing</button>}
             </>}
           </div>}
-          {cart.map((line) => <div key={line.product.id} className="grid grid-cols-[minmax(0,1fr)_64px_64px_24px] items-center gap-2 rounded-md border border-line p-3 text-sm"><div><strong className="block">{line.product.name}</strong><span className="text-xs text-slate-500">{line.product.barcode}</span></div><span className="text-right">{peso(line.product.sellingPrice)}</span><Input className="h-8 text-center" min="1" max={line.product.currentStock} type="number" value={line.quantity} onChange={(event) => setCart((rows) => rows.map((row) => row.product.id === line.product.id ? { ...row, quantity: Math.min(line.product.currentStock, Math.max(1, Number(event.target.value || 1))) } : row))} /><button onClick={() => setCart((rows) => rows.filter((row) => row.product.id !== line.product.id))} aria-label={`Remove ${line.product.name}`}><Trash2 size={16} /></button><span className="col-span-4 text-right font-semibold">{peso(Number(line.product.sellingPrice) * line.quantity - line.productDiscount)}</span></div>)}
+          {selectedCustomer?.customerType === "Member" && <div className="rounded-md border border-brand/20 bg-brand/5 p-3 text-sm"><label className="flex items-center justify-between gap-3"><span>Redeem points <span className="block text-xs text-slate-500">{selectedCustomer.loyaltyPoints} available · {peso(redemptionValue)} each</span></span><Input className="h-9 max-w-28 text-right" aria-label="Loyalty points to redeem" type="number" min="0" max={maxPointsToRedeem} step="1" value={pointsToRedeem} onChange={(event) => setLoyaltyPointsRedeemed(Math.max(0, Math.floor(Number(event.target.value || 0))))} /></label><div className="mt-2 flex justify-between text-xs text-slate-500"><span>Points earned after payment: {pointsToEarn}</span><span>Discount: {peso(totals.pointsDiscount)}</span></div></div>}
+          {cart.map((line) => { const unitPrice = customerPrice(line.product, selectedCustomer?.customerType, line.quantity); const wholesaleUnavailable = selectedCustomer?.customerType === "Wholesale" && line.quantity < (line.product.wholesaleMinQuantity ?? 10); return <div key={line.product.id} className="grid grid-cols-[minmax(0,1fr)_64px_64px_24px] items-center gap-2 rounded-md border border-line p-3 text-sm"><div><strong className="block">{line.product.name}</strong><span className="text-xs text-slate-500">{line.product.barcode}</span></div><span className="text-right">{peso(unitPrice)}</span><Input className="h-8 text-center" min="1" max={line.product.currentStock} type="number" value={line.quantity} onChange={(event) => setCart((rows) => rows.map((row) => row.product.id === line.product.id ? { ...row, quantity: Math.min(line.product.currentStock, Math.max(1, Number(event.target.value || 1))) } : row))} /><button onClick={() => setCart((rows) => rows.filter((row) => row.product.id !== line.product.id))} aria-label={`Remove ${line.product.name}`}><Trash2 size={16} /></button><span className="col-span-4 text-right font-semibold">{peso(unitPrice * line.quantity - line.productDiscount)}{wholesaleUnavailable && <span className="ml-1 text-xs font-normal text-slate-500">Retail (min {line.product.wholesaleMinQuantity ?? 10})</span>}</span></div>; })}
         </div>
         {heldSales.length > 0 && (
           <div className="mt-5 space-y-2 border-t pt-4">
@@ -507,7 +588,7 @@ export function POS() {
             ))}
           </div>
         )}
-        <div className="mt-5 space-y-2 border-t pt-4 text-sm"><div className="flex justify-between"><span>Subtotal</span><strong>{peso(totals.subtotal)}</strong></div><div className="flex justify-between"><span>Discount</span><strong>{peso(0)}</strong></div><div className="flex justify-between text-lg"><span>Grand Total</span><strong>{peso(totals.total)}</strong></div><Input value={amountPaid} onChange={(event) => setAmountPaid(event.target.value)} type="number" min="0" step="0.01" placeholder="Amount received for cash" /><div className="flex justify-between"><span>Change</span><strong>{peso(totals.change)}</strong></div><div className="grid gap-2"><Button type="button" className="bg-slate-700 hover:bg-slate-800" disabled={!hasPermission("sales.hold") || cart.length === 0 || holdMutation.isPending} onClick={() => holdMutation.mutate()}><Pause size={18} /> {holdMutation.isPending ? "Holding..." : "Hold Order"}</Button><Button type="button" className="bg-emerald-700 hover:bg-emerald-800" disabled={!hasPermission("payments.process") || !hasPermission("sales.create") || cart.length === 0 || payMongoMutation.isPending || saleMutation.isPending} onClick={checkoutGcash}><Wallet size={18} /> {payMongoMutation.isPending ? "Opening GCash..." : "Pay with GCash"}</Button><Button disabled={!hasPermission("sales.create") || cart.length === 0 || saleMutation.isPending || !Number.isFinite(Number(amountPaid)) || Number(amountPaid || 0) < totals.total} onClick={checkoutCash}><Printer size={18} /> {saleMutation.isPending ? "Processing..." : "Cash Checkout / Pay"}</Button></div></div>
+        <div className="mt-5 space-y-2 border-t pt-4 text-sm"><div className="flex justify-between"><span>Subtotal</span><strong>{peso(totals.subtotal)}</strong></div><div className="flex justify-between"><span>Discount</span><strong>{peso(totals.pointsDiscount)}</strong></div><div className="flex justify-between text-lg"><span>Grand Total</span><strong>{peso(totals.total)}</strong></div><Input aria-label="Amount received for cash" value={amountPaid} onChange={(event) => setAmountPaid(event.target.value)} type="number" min="0" max={MAX_MONEY_INPUT} step="0.01" placeholder="Amount received for cash" />{exceedsMoneyLimit && <p role="alert" className="text-xs text-red-700">Maximum amount is {peso(MAX_MONEY_AMOUNT)}.</p>}<div className="flex justify-between"><span>Change</span><strong>{peso(totals.change)}</strong></div><div className="grid gap-2"><Button type="button" className="bg-slate-700 hover:bg-slate-800" disabled={!hasPermission("sales.hold") || cart.length === 0 || holdMutation.isPending} onClick={() => holdMutation.mutate()}><Pause size={18} /> {holdMutation.isPending ? "Holding..." : "Hold Order"}</Button><Button type="button" className="bg-emerald-700 hover:bg-emerald-800" disabled={!hasPermission("payments.process") || !hasPermission("sales.create") || cart.length === 0 || payMongoMutation.isPending || saleMutation.isPending} onClick={checkoutGcash}><Wallet size={18} /> {payMongoMutation.isPending ? "Opening GCash..." : "Pay with GCash"}</Button><Button disabled={!hasPermission("sales.create") || cart.length === 0 || saleMutation.isPending || exceedsMoneyLimit || !Number.isFinite(Number(amountPaid)) || Number(amountPaid || 0) < totals.total} onClick={checkoutCash}><Printer size={18} /> {saleMutation.isPending ? "Processing..." : "Cash Checkout / Pay"}</Button></div></div>
       </Card>
       {sessionStorage.getItem(pendingPayMongoStorageKey) && <Card><p className="mb-3 text-sm">A GCash checkout is awaiting reconciliation. Verify it before collecting another payment.</p><Button disabled={saleMutation.isPending} onClick={() => { processingPayMongoReturnRef.current = false; setSearchParams({ paymongoResult: "success" }); }}>Verify pending GCash payment</Button></Card>}
       {completedSale && <ReceiptDialog sale={completedSale} onClose={() => setCompletedSale(null)} />}
@@ -549,6 +630,7 @@ function ReceiptDialog({ sale, onClose }: { sale: Sale; onClose: () => void }) {
             <div className="flex justify-between gap-3"><span>Amount paid</span><span>{peso(sale.amountPaid)}</span></div>
             <div className="flex justify-between gap-3"><span>Change</span><span>{peso(sale.change)}</span></div>
             {sale.loyaltyPointsEarned > 0 && <div className="flex justify-between gap-3 font-bold"><span>Loyalty points earned</span><span>{sale.loyaltyPointsEarned}</span></div>}
+            {sale.loyaltyPointsRedeemed > 0 && <div className="flex justify-between gap-3"><span>Points redeemed</span><span>{sale.loyaltyPointsRedeemed} (−{peso(sale.loyaltyDiscount)})</span></div>}
           </div>
           <div className="mt-4 text-center">Thank you</div>
         </div>

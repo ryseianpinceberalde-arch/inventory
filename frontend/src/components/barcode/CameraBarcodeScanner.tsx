@@ -17,9 +17,10 @@ interface CameraBarcodeScannerProps {
   onScan: (barcode: string) => void;
   continuous?: boolean;
   compact?: boolean;
+  qrOnly?: boolean;
 }
 
-export function CameraBarcodeScanner({ onClose, onScan, continuous = false, compact = false }: CameraBarcodeScannerProps) {
+export function CameraBarcodeScanner({ onClose, onScan, continuous = false, compact = false, qrOnly = false }: CameraBarcodeScannerProps) {
   const generatedId = useId().replace(/:/g, "");
   const readerId = `barcode-camera-${generatedId}`;
   const scannerRef = useRef<Html5Qrcode | null>(null);
@@ -96,7 +97,7 @@ export function CameraBarcodeScanner({ onClose, onScan, continuous = false, comp
 
       try {
         const scanner = new Html5Qrcode(readerId, {
-          formatsToSupport: barcodeFormats,
+          formatsToSupport: qrOnly ? [Html5QrcodeSupportedFormats.QR_CODE] : barcodeFormats,
           useBarCodeDetectorIfSupported: true,
           verbose: false
         });
@@ -105,12 +106,17 @@ export function CameraBarcodeScanner({ onClose, onScan, continuous = false, comp
         await scanner.start(
           cameraId,
           {
-            fps: 30,
-            qrbox: (viewfinderWidth, viewfinderHeight) => ({
-              width: Math.floor(viewfinderWidth * (compact ? 0.9 : 0.98)),
-              height: Math.floor(Math.min(viewfinderHeight * (compact ? 0.36 : 0.42), compact ? 140 : 260))
-            }),
-            aspectRatio: 1.777778,
+            fps: qrOnly ? 12 : 30,
+            qrbox: qrOnly
+              ? (viewfinderWidth, viewfinderHeight) => {
+                const size = Math.floor(Math.min(viewfinderWidth, viewfinderHeight) * 0.75);
+                return { width: size, height: size };
+              }
+              : (viewfinderWidth, viewfinderHeight) => ({
+                width: Math.floor(viewfinderWidth * (compact ? 0.9 : 0.98)),
+                height: Math.floor(Math.min(viewfinderHeight * (compact ? 0.36 : 0.42), compact ? 140 : 260))
+              }),
+            aspectRatio: qrOnly ? 1 : 1.777778,
             disableFlip: true
           },
           (decodedText) => {
@@ -125,7 +131,8 @@ export function CameraBarcodeScanner({ onClose, onScan, continuous = false, comp
               hasScannedRef.current = true;
             }
             setDetectedBarcode(scannedBarcode);
-            setStatus(continuous ? "Barcode detected. Remove it from view to scan it again." : "Barcode detected");
+            const label = qrOnly ? "QR code" : "Barcode";
+            setStatus(continuous ? `${label} detected. Remove it from view to scan it again.` : `${label} detected`);
             onScanRef.current(scannedBarcode);
           },
           () => {
@@ -139,7 +146,7 @@ export function CameraBarcodeScanner({ onClose, onScan, continuous = false, comp
           }
         );
 
-        if (!cancelled) setStatus("Camera ready. Point it at the barcode.");
+        if (!cancelled) setStatus(qrOnly ? "Camera ready. Point it at the loyalty QR code." : "Camera ready. Point it at the barcode.");
       } catch (scanError) {
         if (cancelled) return;
         setStatus("Camera failed");
@@ -153,14 +160,14 @@ export function CameraBarcodeScanner({ onClose, onScan, continuous = false, comp
       cancelled = true;
       void stopScanner();
     };
-  }, [cameraId, compact, continuous, readerId, stopScanner]);
+  }, [cameraId, compact, continuous, qrOnly, readerId, stopScanner]);
 
   return (
     <div className={compact ? "space-y-2" : "space-y-3"}>
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2 text-sm font-semibold">
           <Camera size={18} />
-          Camera barcode scanner
+          {qrOnly ? "Camera loyalty QR scanner" : "Camera barcode scanner"}
         </div>
         <Button type="button" className="h-9 bg-slate-700 px-3 hover:bg-slate-800" onClick={onClose}>
           <X size={16} />

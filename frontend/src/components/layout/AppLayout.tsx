@@ -35,7 +35,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
   const location = useLocation();
   const navigate = useNavigate();
   const { user, logout, hasAnyPermission } = useAuth();
-  const { data: notifications = [] } = useQuery({ queryKey: ["notifications"], queryFn: () => getData<Array<{ isRead: boolean }>>("/notifications"), enabled: hasAnyPermission(["notifications.view"]) });
+  const { data: notifications = [] } = useQuery({ queryKey: ["notifications"], queryFn: () => getData<Array<{ isRead: boolean }>>("/notifications"), enabled: hasAnyPermission(["notifications.view"]), refetchInterval: 30_000 });
   const unread = notifications.filter((item) => !item.isRead).length;
   const crumbs = useMemo(() => location.pathname.split("/").filter(Boolean), [location.pathname]);
 
@@ -105,9 +105,9 @@ export function AppLayout({ children }: { children: ReactNode }) {
           </div>
           <div className="flex items-center gap-2">
             <button onClick={toggleTheme} className="rounded-md border border-line p-2 dark:border-slate-700" aria-label="Toggle theme">{dark ? <Sun size={18} /> : <Moon size={18} />}</button>
-            {hasAnyPermission(["notifications.view"]) && <button onClick={() => navigate("/notifications")} className="relative rounded-md border border-line p-2 dark:border-slate-700" aria-label="Notifications">
+            {hasAnyPermission(["notifications.view"]) && <button onClick={() => navigate("/notifications")} className="relative rounded-md border border-line p-2 dark:border-slate-700" aria-label={unread ? `Notifications, ${unread} unread` : "Notifications"} title={unread ? `${unread} unread notifications` : "Notifications"}>
               <Bell size={18} />
-              {unread > 0 && <span className="absolute -right-1 -top-1 rounded-full bg-accent px-1.5 text-xs text-white">{unread}</span>}
+              {unread > 0 && <span className="absolute -right-1 -top-1 min-w-5 rounded-full bg-accent px-1.5 text-center text-xs text-white">{unread > 99 ? "99+" : unread}</span>}
             </button>}
             <button disabled={loggingOut} onClick={() => void signOut()} className="rounded-md border border-line p-2 dark:border-slate-700" aria-label="Logout"><LogOut size={18} /></button>
             <Link to="/profile" className="hidden text-right text-sm sm:block">

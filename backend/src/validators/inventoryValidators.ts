@@ -54,6 +54,7 @@ export const saleSchema = z.object({
   paymentMethod: z.enum(["CASH", "GCASH", "MAYA", "BANK_TRANSFER", "DEBIT_CARD", "CREDIT_CARD", "CUSTOMER_CREDIT", "MIXED"]),
   amountPaid: money,
   transactionDiscount: money.default("0"),
+  loyaltyPointsRedeemed: z.coerce.number().int().min(0).max(2_147_483_647).default(0),
   idempotencyKey: z.string().min(8).max(200),
   checkoutSessionId: z.string().regex(/^cs_[A-Za-z0-9]+$/).optional(),
   items: z.array(z.object({

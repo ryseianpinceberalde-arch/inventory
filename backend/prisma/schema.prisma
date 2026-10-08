@@ -157,11 +157,14 @@ model Product {
   description        String?
   costPrice          Decimal             @db.Decimal(12, 2)
   sellingPrice       Decimal             @db.Decimal(12, 2)
+  memberPrice        Decimal?            @db.Decimal(12, 2)
+  wholesalePrice     Decimal?            @db.Decimal(12, 2)
+  wholesaleMinQuantity Int               @default(10)
   currentStock       Int                 @default(0)
   reorderLevel       Int                 @default(0)
   unit               String              @default("pcs")
   imageUrl           String?
-  tracksExpiration   Boolean             @default(false)
+  tracksExpiration   Boolean             @default(true)
   status             ProductStatus       @default(ACTIVE)
   category           Category            @relation(fields: [categoryId], references: [id])
   primarySupplier    Supplier?           @relation(fields: [primarySupplierId], references: [id])
@@ -278,13 +281,14 @@ model Customer {
   phone          String?
   email          String?
   address        String?
-  customerType   String        @default("Walk-in")
+  customerType   String        @default("Regular")
   loyaltyPoints  Int           @default(0)
   creditBalance  Decimal       @default(0) @db.Decimal(12, 2)
   birthday       DateTime?     @db.Date
   notes          String?
   status         ProductStatus @default(ACTIVE)
   sales          Sale[]
+  loyaltyTransactions LoyaltyTransaction[]
   createdAt      DateTime      @default(now()) @db.Timestamptz
   updatedAt      DateTime      @updatedAt @db.Timestamptz
 
@@ -372,11 +376,14 @@ model Sale {
   idempotencyKey      String?       @unique
   grossProfit         Decimal       @default(0) @db.Decimal(12, 2)
   loyaltyPointsEarned Int           @default(0)
+  loyaltyPointsRedeemed Int         @default(0)
+  loyaltyDiscount   Decimal         @default(0) @db.Decimal(12, 2)
   customer            Customer?     @relation(fields: [customerId], references: [id])
   cashier             User          @relation("CashierSales", fields: [cashierId], references: [id])
   items               SaleItem[]
   payments            Payment[]
   refunds             Refund[]
+  loyaltyTransactions LoyaltyTransaction[]
   createdAt           DateTime      @default(now()) @db.Timestamptz
   updatedAt           DateTime      @updatedAt @db.Timestamptz
 
@@ -443,7 +450,25 @@ model Refund {
   processedById  String        @db.Uuid
   sale           Sale          @relation(fields: [saleId], references: [id])
   items          RefundItem[]
+  loyaltyTransactions LoyaltyTransaction[]
   createdAt      DateTime      @default(now()) @db.Timestamptz
+}
+
+model LoyaltyTransaction {
+  id             String   @id @default(uuid()) @db.Uuid
+  customerId     String   @db.Uuid
+  saleId         String?  @unique @db.Uuid
+  refundId       String?  @unique @db.Uuid
+  transactionType String
+  pointsEarned   Int      @default(0)
+  pointsRedeemed Int      @default(0)
+  note           String?
+  customer       Customer @relation(fields: [customerId], references: [id])
+  sale           Sale?    @relation(fields: [saleId], references: [id])
+  refund         Refund?  @relation(fields: [refundId], references: [id])
+  createdAt      DateTime @default(now()) @db.Timestamptz
+
+  @@index([customerId, createdAt])
 }
 
 model RefundItem {

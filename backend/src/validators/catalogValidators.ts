@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { money } from "./common.js";
 
+const MAX_PRODUCT_STOCK = 2_147_483_647;
+
 export const categorySchema = z.object({
   name: z.string().min(2),
   description: z.string().optional(),
@@ -16,11 +18,14 @@ export const productSchema = z.object({
   description: z.string().optional(),
   costPrice: money,
   sellingPrice: money,
-  currentStock: z.coerce.number().int().min(0).default(0),
-  reorderLevel: z.coerce.number().int().min(0).default(0),
+  memberPrice: money.nullable().optional(),
+  wholesalePrice: money.nullable().optional(),
+  wholesaleMinQuantity: z.coerce.number().int().min(1).max(MAX_PRODUCT_STOCK).default(10),
+  currentStock: z.coerce.number().int().min(0).max(MAX_PRODUCT_STOCK, "Starting stock cannot exceed 2,147,483,647.").default(0),
+  reorderLevel: z.coerce.number().int().min(0).max(MAX_PRODUCT_STOCK, "Low-stock alert level cannot exceed 2,147,483,647.").default(0),
   unit: z.string().default("pcs"),
   imageUrl: z.string().optional().nullable(),
-  tracksExpiration: z.boolean().default(false),
+  tracksExpiration: z.boolean().default(true),
   status: z.enum(["ACTIVE", "ARCHIVED"]).default("ACTIVE")
 });
 
@@ -44,14 +49,19 @@ export const supplierProductSchema = z.object({
 });
 
 export const customerSchema = z.object({
-  fullName: z.string().min(2),
-  phone: z.string().optional(),
+  fullName: z.string().trim().min(2).max(160),
+  phone: z.string().trim().min(7).max(32),
   email: z.string().email().optional().or(z.literal("")),
   address: z.string().optional(),
-  customerType: z.enum(["Walk-in", "Regular", "Member", "Wholesale"]).default("Walk-in"),
-  loyaltyPoints: z.coerce.number().int().min(0).default(0),
-  creditBalance: money.default("0"),
-  birthday: z.string().date().transform((value) => new Date(`${value}T00:00:00Z`).toISOString()).optional().nullable(),
-  notes: z.string().optional(),
-  status: z.enum(["ACTIVE", "ARCHIVED"]).default("ACTIVE")
+  customerType: z.enum(["Regular", "Member", "Wholesale"]).default("Regular")
+});
+
+export const loyaltySettingsSchema = z.object({
+  earningSpend: z.coerce.number().finite().positive().max(1_000_000).refine((value) => Math.abs(value * 100 - Math.round(value * 100)) < 1e-8),
+  redemptionValue: z.coerce.number().finite().positive().max(10_000).refine((value) => Math.abs(value * 100 - Math.round(value * 100)) < 1e-8)
+});
+
+export const loyaltyAdjustmentSchema = z.object({
+  pointsDelta: z.coerce.number().int().min(-2_147_483_647).max(2_147_483_647).refine((value) => value !== 0),
+  reason: z.string().trim().min(3).max(500)
 });

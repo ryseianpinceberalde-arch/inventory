@@ -3,6 +3,8 @@ import { prisma } from "../config/prisma.js";
 import { AppError } from "../utils/AppError.js";
 import { verifyCheckout } from "./paymongoService.js";
 import { createLowStockAlert } from "./inventoryService.js";
+import { defaultLoyaltySettings, getLoyaltySettings, pointsEarnedFor, pointsToReverseOnRefund } from "./loyaltyService.js";
+import { customerUnitPrice } from "../utils/customerPricing.js";
 
 export async function listHeldSales(cashierId: string) {
   return prisma.heldSale.findMany({
@@ -56,12 +58,14 @@ export async function completeSale(input: {
   paymentMethod: PaymentMethod;
   amountPaid: string;
   transactionDiscount: string;
+  loyaltyPointsRedeemed?: number;
   idempotencyKey: string;
   checkoutSessionId?: string;
   items: { productId: string; quantity: number; productDiscount: string }[];
 }) {
   if (input.paymentMethod === "GCASH" && !input.checkoutSessionId) throw new AppError("A verified GCash checkout is required.", 422);
-  const verifiedAmount = input.paymentMethod === "GCASH" ? await verifyCheckout(input.checkoutSessionId!, input.cashierId, input.items) : null;
+  const pointsRedeemed = input.loyaltyPointsRedeemed ?? 0;
+  const verifiedAmount = input.paymentMethod === "GCASH" ? await verifyCheckout(input.checkoutSessionId!, input.cashierId, input.items, input.customerId, pointsRedeemed) : null;
   return prisma.$transaction(async (tx) => {
     await tx.$queryRaw`SELECT 1 FROM pg_advisory_xact_lock(hashtext(${input.idempotencyKey}))`;
     if (input.checkoutSessionId) await tx.$queryRaw`SELECT 1 FROM pg_advisory_xact_lock(hashtext(${input.checkoutSessionId}))`;
@@ -75,10 +79,15 @@ export async function completeSale(input: {
       const used = await tx.payment.findFirst({ where: { referenceNumber: input.checkoutSessionId } });
       if (used) throw new AppError("This payment was already recorded. Open sales to view its receipt.", 409);
     }
+    let customer: { status: string; customerType: string; loyaltyPoints: number } | null = null;
     if (input.customerId) {
-      const customer = await tx.customer.findUnique({ where: { id: input.customerId }, select: { status: true } });
+      await tx.$queryRaw`SELECT id FROM "Customer" WHERE id = ${input.customerId}::uuid FOR UPDATE`;
+      customer = await tx.customer.findUnique({ where: { id: input.customerId }, select: { status: true, customerType: true, loyaltyPoints: true } });
       if (!customer || customer.status !== "ACTIVE") throw new AppError("Active customer not found", 404);
     }
+    if (pointsRedeemed > 0 && customer?.customerType !== "Member") throw new AppError("Only members can redeem loyalty points.", 422);
+    if (customer && pointsRedeemed > customer.loyaltyPoints) throw new AppError("The customer does not have enough loyalty points.", 409);
+    const loyaltySettings = customer?.customerType === "Member" ? await getLoyaltySettings(tx) : defaultLoyaltySettings;
     const lines = [];
     let subtotal = new Prisma.Decimal(0);
     let grossProfit = new Prisma.Decimal(0);
@@ -88,21 +97,28 @@ export async function completeSale(input: {
       if (!product || product.status !== "ACTIVE") throw new AppError("Active product not found", 404);
       if (product.currentStock < item.quantity) throw new AppError(`Insufficient stock for ${product.name}`, 400);
       const productDiscount = new Prisma.Decimal(item.productDiscount);
-      const lineTotal = product.sellingPrice.mul(item.quantity).sub(productDiscount);
+      const unitPrice = customerUnitPrice(product, customer?.customerType, item.quantity);
+      const lineTotal = unitPrice.mul(item.quantity).sub(productDiscount);
       if (lineTotal.lt(0)) throw new AppError("Discount exceeds the product total", 422);
-      const profit = product.sellingPrice.sub(product.costPrice).mul(item.quantity).sub(productDiscount);
+      const profit = unitPrice.sub(product.costPrice).mul(item.quantity).sub(productDiscount);
       subtotal = subtotal.add(lineTotal);
       grossProfit = grossProfit.add(profit);
-      lines.push({ product, quantity: item.quantity, productDiscount, lineTotal, profit });
+      lines.push({ product, quantity: item.quantity, unitPrice, productDiscount, lineTotal, profit });
     }
 
     const discountTotal = new Prisma.Decimal(input.transactionDiscount);
-    const total = subtotal.sub(discountTotal);
+    const loyaltyDiscount = new Prisma.Decimal(pointsRedeemed).mul(loyaltySettings.redemptionValue).toDecimalPlaces(2);
+    if (loyaltyDiscount.gt(subtotal.sub(discountTotal))) throw new AppError("Point redemption exceeds the order total.", 422);
+    const total = subtotal.sub(discountTotal).sub(loyaltyDiscount);
     if (total.lt(0)) throw new AppError("Discount exceeds the sale total", 422);
     if (verifiedAmount && !verifiedAmount.eq(total)) throw new AppError("Paid amount differs from the current sale total. Review this payment before continuing.", 409);
     const amountPaid = verifiedAmount ?? new Prisma.Decimal(input.amountPaid);
     if (amountPaid.lt(total)) throw new AppError("Amount paid is below total", 400);
-    const loyaltyPointsEarned = input.customerId ? lines.reduce((points, line) => points + line.quantity, 0) : 0;
+    const loyaltyPointsEarned = customer?.customerType === "Member" ? pointsEarnedFor(total, loyaltySettings.earningSpend) : 0;
+    if (customer && customer.loyaltyPoints - pointsRedeemed + loyaltyPointsEarned > 2_147_483_647) {
+      throw new AppError("This purchase would exceed the customer's points balance limit.", 422);
+    }
+    const totalDiscount = discountTotal.add(loyaltyDiscount);
 
     const sale = await tx.sale.create({
       data: {
@@ -110,20 +126,22 @@ export async function completeSale(input: {
         customerId: input.customerId,
         cashierId: input.cashierId,
         subtotal,
-        discountTotal,
+        discountTotal: totalDiscount,
         tax: 0,
         total,
         amountPaid,
         change: amountPaid.sub(total),
         paymentMethod: input.paymentMethod,
         idempotencyKey: input.idempotencyKey,
-        grossProfit: grossProfit.sub(discountTotal),
+        grossProfit: grossProfit.sub(totalDiscount),
         loyaltyPointsEarned,
+        loyaltyPointsRedeemed: pointsRedeemed,
+        loyaltyDiscount,
         items: {
           create: lines.map((line) => ({
             productId: line.product.id,
             quantity: line.quantity,
-            sellingPrice: line.product.sellingPrice,
+            sellingPrice: line.unitPrice,
             historicalCost: line.product.costPrice,
             productDiscount: line.productDiscount,
             lineTotal: line.lineTotal,
@@ -142,8 +160,18 @@ export async function completeSale(input: {
       include: { items: { include: { product: true } }, payments: true, customer: true, cashier: true }
     });
 
-    if (input.customerId && loyaltyPointsEarned > 0) {
-      await tx.customer.update({ where: { id: input.customerId }, data: { loyaltyPoints: { increment: loyaltyPointsEarned } } });
+    if (input.customerId && (loyaltyPointsEarned > 0 || pointsRedeemed > 0)) {
+      await tx.customer.update({ where: { id: input.customerId }, data: { loyaltyPoints: { increment: loyaltyPointsEarned - pointsRedeemed } } });
+      await tx.loyaltyTransaction.create({
+        data: {
+          customerId: input.customerId,
+          saleId: sale.id,
+          transactionType: "SALE",
+          pointsEarned: loyaltyPointsEarned,
+          pointsRedeemed,
+          note: pointsRedeemed ? `Redeemed ${pointsRedeemed} points; earned ${loyaltyPointsEarned}` : `Earned ${loyaltyPointsEarned} points`
+        }
+      });
     }
 
     for (const line of lines) {
@@ -212,12 +240,49 @@ export async function processRefund(input: {
     });
     const previouslyRefundedQuantity = sale.refunds.flatMap((row) => row.items).reduce((sum, row) => sum + row.quantity, 0);
     const currentRefundQuantity = refundItems.reduce((sum, row) => sum + row.quantity, 0);
-    const pointsToRevoke = Math.max(0,
-      Math.min(sale.loyaltyPointsEarned, previouslyRefundedQuantity + currentRefundQuantity) -
-      Math.min(sale.loyaltyPointsEarned, previouslyRefundedQuantity)
-    );
-    if (sale.customerId && pointsToRevoke > 0) {
-      await tx.$executeRaw`UPDATE "Customer" SET "loyaltyPoints" = GREATEST("loyaltyPoints" - ${pointsToRevoke}, 0), "updatedAt" = CURRENT_TIMESTAMP WHERE "id" = ${sale.customerId}::uuid`;
+    const previousRefundAmount = sale.refunds.reduce((sum, row) => sum.add(row.refundAmount), new Prisma.Decimal(0));
+    const pointsRedemptionBasis = sale.total.add(sale.loyaltyDiscount);
+    const pointsBasisForItem = (item: { productId: string; quantity: number }) => {
+      const saleItem = sale.items.find((row) => row.productId === item.productId);
+      if (!saleItem || sale.subtotal.eq(0)) return new Prisma.Decimal(0);
+      return saleItem.lineTotal.mul(pointsRedemptionBasis).div(sale.subtotal).div(saleItem.quantity).mul(item.quantity).toDecimalPlaces(2);
+    };
+    const previousBasisTotal = sale.refunds.flatMap((row) => row.items).reduce((sum, item) => sum.add(pointsBasisForItem(item)), new Prisma.Decimal(0));
+    const previousPointsBasisAmount = previousBasisTotal.gt(pointsRedemptionBasis) ? pointsRedemptionBasis : previousBasisTotal;
+    let currentPointsBasisAmount = refundItems.reduce((sum, item) => sum.add(pointsBasisForItem(item)), new Prisma.Decimal(0));
+    const totalSoldQuantity = sale.items.reduce((sum, item) => sum + item.quantity, 0);
+    if (previouslyRefundedQuantity + currentRefundQuantity === totalSoldQuantity) {
+      const remainingBasis = pointsRedemptionBasis.sub(previousPointsBasisAmount);
+      currentPointsBasisAmount = remainingBasis.gt(0) ? remainingBasis : new Prisma.Decimal(0);
+    }
+    const pointReversal = pointsToReverseOnRefund({
+      pointsEarned: sale.loyaltyPointsEarned,
+      pointsRedeemed: sale.loyaltyPointsRedeemed,
+      saleTotal: sale.total,
+      previousRefundAmount,
+      currentRefundAmount: refundAmount,
+      pointsRedemptionBasis,
+      previousPointsBasisAmount,
+      currentPointsBasisAmount
+    });
+    let pointsToRevoke = pointReversal.pointsEarnedReversed;
+    const pointsRestored = pointReversal.pointsRedeemedRestored;
+    if (sale.customerId && (pointsToRevoke > 0 || pointsRestored > 0)) {
+      await tx.$queryRaw`SELECT id FROM "Customer" WHERE id = ${sale.customerId}::uuid FOR UPDATE`;
+      const customer = await tx.customer.findUnique({ where: { id: sale.customerId }, select: { loyaltyPoints: true } });
+      if (!customer) throw new AppError("Customer not found", 404);
+      pointsToRevoke = Math.min(pointsToRevoke, customer.loyaltyPoints + pointsRestored);
+      await tx.customer.update({ where: { id: sale.customerId }, data: { loyaltyPoints: { increment: pointsRestored - pointsToRevoke } } });
+      await tx.loyaltyTransaction.create({
+        data: {
+          customerId: sale.customerId,
+          refundId: refund.id,
+          transactionType: "REFUND",
+          pointsEarned: -pointsToRevoke,
+          pointsRedeemed: -pointsRestored,
+          note: `Reversed ${pointsToRevoke} earned points; restored ${pointsRestored} redeemed points`
+        }
+      });
     }
     for (const item of [...refundItems].sort((a, b) => a.productId.localeCompare(b.productId))) {
       await tx.$queryRaw`SELECT id FROM "Product" WHERE id = ${item.productId}::uuid FOR UPDATE`;

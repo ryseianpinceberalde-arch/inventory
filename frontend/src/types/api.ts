@@ -25,6 +25,9 @@ export interface Product {
   description?: string | null;
   costPrice: string;
   sellingPrice: string;
+  memberPrice?: string | null;
+  wholesalePrice?: string | null;
+  wholesaleMinQuantity?: number;
   currentStock: number;
   reorderLevel: number;
   unit: string;
@@ -70,6 +73,8 @@ export interface Sale {
   paymentMethod: string;
   status: string;
   loyaltyPointsEarned: number;
+  loyaltyPointsRedeemed: number;
+  loyaltyDiscount: string;
   createdAt: string;
   cashier?: User;
   customer?: { fullName: string } | null;

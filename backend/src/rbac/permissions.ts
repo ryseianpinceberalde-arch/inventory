@@ -121,6 +121,7 @@ export const defaultRolePermissions: Record<RoleName, string[]> = {
     "customers.view",
     "customers.create",
     "customers.update",
+    "customers.view_purchase_history",
     "pos.access",
     "sales.create",
     "sales.view_own",

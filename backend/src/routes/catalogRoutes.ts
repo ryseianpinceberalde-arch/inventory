@@ -1,8 +1,9 @@
 import { Router } from "express";
+import { z } from "zod";
 import { authenticate, requireAnyPermission, requirePermission } from "../middleware/auth.js";
 import { validate } from "../middleware/validate.js";
 import * as controller from "../controllers/catalogController.js";
-import { categorySchema, customerSchema, productSchema, supplierProductSchema, supplierSchema } from "../validators/catalogValidators.js";
+import { categorySchema, customerSchema, loyaltyAdjustmentSchema, loyaltySettingsSchema, productSchema, supplierProductSchema, supplierSchema } from "../validators/catalogValidators.js";
 
 export const productRoutes = Router();
 productRoutes.use(authenticate);
@@ -41,6 +42,11 @@ supplierProductRoutes.put("/:id", requirePermission("suppliers.update"), validat
 export const customerRoutes = Router();
 customerRoutes.use(authenticate);
 customerRoutes.get("/", requirePermission("customers.view"), controller.listCustomers);
+customerRoutes.get("/loyalty-settings", requirePermission("customers.view"), controller.customerLoyaltySettings);
+customerRoutes.put("/loyalty-settings", requirePermission("settings.update"), validate(loyaltySettingsSchema), controller.updateCustomerLoyaltySettings);
+customerRoutes.post("/anonymous", requirePermission("customers.create"), controller.createAnonymousMember);
 customerRoutes.post("/", requirePermission("customers.create"), validate(customerSchema), controller.createCustomer);
 customerRoutes.get("/:id", requirePermission("customers.view"), controller.getCustomer);
 customerRoutes.put("/:id", requirePermission("customers.update"), validate(customerSchema.partial()), controller.updateCustomer);
+customerRoutes.patch("/:id/status", requirePermission("customers.archive"), validate(z.object({ status: z.enum(["ACTIVE", "ARCHIVED"]) })), controller.updateCustomerStatus);
+customerRoutes.post("/:id/loyalty-adjustments", requirePermission("settings.update"), validate(loyaltyAdjustmentSchema), controller.adjustCustomerLoyaltyPoints);

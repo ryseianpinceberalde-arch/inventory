@@ -3,9 +3,11 @@ import { test, mock } from "node:test";
 import { Prisma } from "@prisma/client";
 import jwt from "jsonwebtoken";
 import { money, paginationQuery } from "../src/validators/common.js";
+import { customerSchema, loyaltySettingsSchema } from "../src/validators/catalogValidators.js";
 import { saleSchema, refundSchema, stockInSchema } from "../src/validators/inventoryValidators.js";
 import { serializeForPermissions, stripSecrets } from "../src/rbac/serializers.js";
 import { businessDateKey, businessDayStart } from "../src/utils/businessDate.js";
+import { customerUnitPrice } from "../src/utils/customerPricing.js";
 
 // No live database or payment provider is used by these regression tests.
 process.env.DATABASE_URL = "postgresql://test:test@localhost:1/test";
@@ -15,9 +17,11 @@ process.env.NODE_ENV = "test";
 const { prisma } = await import("../src/config/prisma.js");
 const { requestAdjustment, approveAdjustment, stockIn } = await import("../src/services/inventoryService.js");
 const { completeSale, processRefund } = await import("../src/services/salesService.js");
+const { adjustCustomerPoints, buildAnonymousMemberData } = await import("../src/services/customerService.js");
 const { findRefreshToken, signRefreshToken } = await import("../src/services/tokenService.js");
 const { notificationScope } = await import("../src/controllers/inventoryController.js");
 const { verifyCheckout, checkoutCartHash } = await import("../src/services/paymongoService.js");
+const { defaultLoyaltySettings, normalizeLoyaltySettings, pointsEarnedFor, pointsToReverseOnRefund } = await import("../src/services/loyaltyService.js");
 const { env } = await import("../src/config/env.js");
 
 const productId = "00000000-0000-4000-8000-000000000001";
@@ -40,6 +44,62 @@ test("duplicate product lines and invalid dates/pagination are rejected", () => 
   assert.equal(stockInSchema.safeParse({ referenceNo: "TEST", supplierId: actorId, deliveryDate: new Date().toISOString(), items: [{ productId, quantity: 1, unitCost: "5" }, { productId, quantity: 2, unitCost: "4.5" }] }).success, false);
   assert.equal(stockInSchema.safeParse({ referenceNo: "TEST", supplierId: actorId, deliveryDate: new Date().toISOString(), items: [{ productId, quantity: 1, unitCost: "5", sellingPrice: "8.999" }] }).success, false);
   for (const input of [{ page: "nope" }, { page: -1 }, { limit: 1000 }, { sortBy: "passwordHash" }]) assert.equal(paginationQuery.safeParse(input).success, false);
+});
+
+test("customer registration requires contact details and starts with a supported customer type", () => {
+  const customer = { fullName: "Member Example", phone: "09171234567", customerType: "Member" };
+  assert.equal(customerSchema.safeParse(customer).success, true);
+  assert.equal(customerSchema.safeParse({ ...customer, phone: undefined }).success, false);
+  assert.equal(customerSchema.safeParse({ ...customer, customerType: "Walk-in" }).success, false);
+  assert.equal(loyaltySettingsSchema.safeParse({ earningSpend: 100, redemptionValue: 1 }).success, true);
+  assert.equal(loyaltySettingsSchema.safeParse({ earningSpend: 100, redemptionValue: 0 }).success, false);
+});
+
+test("anonymous loyalty accounts get unique member IDs without personal contact details", async () => {
+  const customer = buildAnonymousMemberData();
+  const anotherCustomer = buildAnonymousMemberData();
+  assert.match(customer.id, /^[0-9a-f-]{36}$/i);
+  assert.notEqual(customer.id, anotherCustomer.id);
+  assert.match(customer.fullName, /^Anonymous Member [0-9A-F]{8}$/);
+  assert.equal(customer.customerType, "Member");
+  assert.equal(customer.loyaltyPoints, 0);
+  assert.equal("phone" in customer, false);
+  assert.equal("email" in customer, false);
+});
+
+test("customer pricing uses retail, member, and wholesale quantity rules", () => {
+  const priceable = {
+    sellingPrice: new Prisma.Decimal(100),
+    memberPrice: new Prisma.Decimal(95),
+    wholesalePrice: new Prisma.Decimal(85),
+    wholesaleMinQuantity: 10
+  };
+  assert.equal(customerUnitPrice(priceable, "Regular", 20).toString(), "100");
+  assert.equal(customerUnitPrice(priceable, "Member", 1).toString(), "95");
+  assert.equal(customerUnitPrice(priceable, "Wholesale", 9).toString(), "100");
+  assert.equal(customerUnitPrice(priceable, "Wholesale", 10).toString(), "85");
+  assert.equal(customerUnitPrice({ ...priceable, wholesalePrice: null }, "Wholesale", 10).toString(), "100");
+});
+
+test("loyalty rules default safely, earn from paid totals, and reverse partial refunds proportionally", () => {
+  assert.deepEqual(normalizeLoyaltySettings(null), defaultLoyaltySettings);
+  assert.equal(pointsEarnedFor(new Prisma.Decimal(500), 100), 5);
+  assert.equal(pointsEarnedFor(new Prisma.Decimal(499.99), 100), 4);
+  assert.deepEqual(pointsToReverseOnRefund({
+    pointsEarned: 5, pointsRedeemed: 10,
+    saleTotal: new Prisma.Decimal(100), previousRefundAmount: new Prisma.Decimal(0), currentRefundAmount: new Prisma.Decimal(50),
+    pointsRedemptionBasis: new Prisma.Decimal(110), previousPointsBasisAmount: new Prisma.Decimal(0), currentPointsBasisAmount: new Prisma.Decimal(55)
+  }), { pointsEarnedReversed: 2, pointsRedeemedRestored: 5 });
+  assert.deepEqual(pointsToReverseOnRefund({
+    pointsEarned: 5, pointsRedeemed: 10,
+    saleTotal: new Prisma.Decimal(100), previousRefundAmount: new Prisma.Decimal(50), currentRefundAmount: new Prisma.Decimal(50),
+    pointsRedemptionBasis: new Prisma.Decimal(110), previousPointsBasisAmount: new Prisma.Decimal(55), currentPointsBasisAmount: new Prisma.Decimal(55)
+  }), { pointsEarnedReversed: 3, pointsRedeemedRestored: 5 });
+  assert.deepEqual(pointsToReverseOnRefund({
+    pointsEarned: 0, pointsRedeemed: 10,
+    saleTotal: new Prisma.Decimal(0), previousRefundAmount: new Prisma.Decimal(0), currentRefundAmount: new Prisma.Decimal(0),
+    pointsRedemptionBasis: new Prisma.Decimal(10), previousPointsBasisAmount: new Prisma.Decimal(0), currentPointsBasisAmount: new Prisma.Decimal(10)
+  }), { pointsEarnedReversed: 0, pointsRedeemedRestored: 10 });
 });
 
 test("secrets and restricted report summaries/columns are removed recursively", () => {
@@ -124,8 +184,85 @@ test("sale discounts reduce profit and repeated requests reuse the receipt", asy
   try {
     const result = await completeSale(saleInput);
     assert.equal(String(result.total), "35"); assert.equal(String(result.grossProfit), "15");
+    assert.equal(result.loyaltyPointsEarned, 0);
     assert.deepEqual(await completeSale(saleInput), result); assert.equal(stockWrites, 1);
     await assert.rejects(completeSale({ ...saleInput, cashierId: productId }), /already in use/);
+  } finally { transaction.mock.restore(); }
+});
+
+test("a member sale snapshots member price and records earned and redeemed points atomically", async () => {
+  const memberId = "00000000-0000-4000-8000-000000000003";
+  const memberProduct = { ...product, currentStock: 50, reorderLevel: 0, sellingPrice: new Prisma.Decimal(110), memberPrice: new Prisma.Decimal(100), wholesalePrice: new Prisma.Decimal(85), wholesaleMinQuantity: 10 };
+  let saved: Record<string, unknown> | null = null;
+  const balanceChanges: unknown[] = [];
+  const pointRows: unknown[] = [];
+  const tx = {
+    $queryRaw: async () => [],
+    systemSetting: { findUnique: async () => ({ value: { earningSpend: 100, redemptionValue: 1 } }) },
+    customer: {
+      findUnique: async () => ({ status: "ACTIVE", customerType: "Member", loyaltyPoints: 20 }),
+      update: async (value: unknown) => { balanceChanges.push(value); }
+    },
+    sale: {
+      findUnique: async () => saved,
+      create: async ({ data }: { data: Record<string, unknown> }) => { saved = { id: "member-sale", ...data }; return saved; }
+    },
+    product: { findUnique: async () => memberProduct, update: async () => undefined },
+    stockMovement: { create: async () => ({}) },
+    loyaltyTransaction: { create: async ({ data }: { data: unknown }) => { pointRows.push(data); } }
+  };
+  const transaction = mock.method(prisma, "$transaction", async (fn: (value: unknown) => unknown) => fn(tx));
+  try {
+    const sale = await completeSale({ ...saleInput, receiptNo: "MEMBER-500", amountPaid: "500", transactionDiscount: "0", customerId: memberId, items: [{ ...item, quantity: 5 }] });
+    assert.equal(String(sale.total), "500");
+    assert.equal(sale.loyaltyPointsEarned, 5);
+    assert.equal((saved as { items: { create: Array<{ sellingPrice: Prisma.Decimal }> } }).items.create[0].sellingPrice.toString(), "100");
+    assert.deepEqual(balanceChanges[0], { where: { id: memberId }, data: { loyaltyPoints: { increment: 5 } } });
+    assert.deepEqual(pointRows[0], { customerId: memberId, saleId: "member-sale", transactionType: "SALE", pointsEarned: 5, pointsRedeemed: 0, note: "Earned 5 points" });
+  } finally { transaction.mock.restore(); }
+
+  let redemptionSaved: Record<string, unknown> | null = null;
+  const redemptionChanges: unknown[] = [];
+  const redemptionRows: unknown[] = [];
+  const redemptionTx = {
+    $queryRaw: async () => [],
+    systemSetting: { findUnique: async () => ({ value: { earningSpend: 100, redemptionValue: 1 } }) },
+    customer: { findUnique: async () => ({ status: "ACTIVE", customerType: "Member", loyaltyPoints: 20 }), update: async (value: unknown) => { redemptionChanges.push(value); } },
+    sale: { findUnique: async () => null, create: async ({ data }: { data: Record<string, unknown> }) => { redemptionSaved = { id: "redeemed-sale", ...data }; return redemptionSaved; } },
+    product: { findUnique: async () => memberProduct, update: async () => undefined },
+    stockMovement: { create: async () => ({}) },
+    loyaltyTransaction: { create: async ({ data }: { data: unknown }) => { redemptionRows.push(data); } }
+  };
+  const redemptionTransaction = mock.method(prisma, "$transaction", async (fn: (value: unknown) => unknown) => fn(redemptionTx));
+  try {
+    const sale = await completeSale({ ...saleInput, receiptNo: "MEMBER-REDEEM", amountPaid: "480", transactionDiscount: "0", loyaltyPointsRedeemed: 20, customerId: memberId, items: [{ ...item, quantity: 5 }] });
+    assert.equal(String(sale.total), "480");
+    assert.equal(sale.loyaltyDiscount.toString(), "20");
+    assert.equal(sale.loyaltyPointsEarned, 4);
+    assert.deepEqual(redemptionChanges[0], { where: { id: memberId }, data: { loyaltyPoints: { increment: -16 } } });
+    assert.equal((redemptionRows[0] as { pointsRedeemed: number }).pointsRedeemed, 20);
+  } finally { redemptionTransaction.mock.restore(); }
+});
+
+test("admin point adjustments are ledgered and cannot create a negative balance", async () => {
+  let balance = 20;
+  const entries: unknown[] = [];
+  const tx = {
+    $queryRaw: async () => [],
+    customer: {
+      findUnique: async () => ({ loyaltyPoints: balance }),
+      update: async ({ data }: { data: { loyaltyPoints: { increment: number } } }) => { balance += data.loyaltyPoints.increment; }
+    },
+    loyaltyTransaction: { create: async ({ data }: { data: unknown }) => { entries.push(data); return { id: "adjustment", ...data as object }; } }
+  };
+  const transaction = mock.method(prisma, "$transaction", async (fn: (value: unknown) => unknown) => fn(tx));
+  try {
+    const result = await adjustCustomerPoints(actorId, 5, "Approved correction");
+    assert.equal(result.loyaltyPoints, 25);
+    assert.deepEqual(entries[0], { customerId: actorId, transactionType: "ADJUSTMENT", pointsEarned: 5, pointsRedeemed: 0, note: "Approved correction" });
+    await assert.rejects(adjustCustomerPoints(actorId, -26, "Invalid removal"), /below zero/);
+    assert.equal(balance, 25);
+    assert.equal(entries.length, 1);
   } finally { transaction.mock.restore(); }
 });
 

@@ -49,7 +49,7 @@ flowchart TB
         Routes[Route groups]
         Middleware[Authentication, permission checks,<br/>Zod validation]
         Controllers[Controllers<br/>request and response handling]
-        Services[Domain services<br/>auth, catalog, inventory, sales,<br/>reports, payments, audit]
+        Services[Domain services<br/>auth, catalog, customers, loyalty,<br/>inventory, sales, reports, payments, audit]
         Prisma[Prisma Client]
         Errors[Not-found and error handling]
         App --> Routes
@@ -105,8 +105,8 @@ sequenceDiagram
     participant DB as PostgreSQL
 
     Cashier->>UI: Build sale and choose GCash
-    UI->>API: Request hosted checkout
-    API->>DB: Read active products and prices
+    UI->>API: Request hosted checkout with cart,<br/>customer, and requested points
+    API->>DB: Read customer type, point balance,<br/>product prices, and loyalty rules
     API->>Pay: Create GCash checkout session
     Pay-->>API: Checkout URL and session ID
     API-->>UI: Checkout details
@@ -116,12 +116,12 @@ sequenceDiagram
     UI->>API: Complete sale with checkout session
     API->>Pay: Verify paid status, amount, and cart hash
     Pay-->>API: Payment status
-    API->>DB: Transactionally create sale, payment,<br/>stock movements, and update stock
+    API->>DB: Transactionally create sale, payment,<br/>point ledger, stock movements, and update balances
     DB-->>API: Commit result
     API-->>UI: Sale receipt data
 ```
 
-The sale operation checks stock under database locks, uses an idempotency key, and records sale/payment/inventory changes in a database transaction. A failed transaction does not leave only part of those database changes committed. The current integration verifies checkout status through the PayMongo API; the mounted API routes do not include a payment webhook endpoint.
+The sale operation locks the customer and product rows, checks current stock, recalculates customer pricing and loyalty points, uses an idempotency key, and records sale/payment/inventory/loyalty changes in one database transaction. A failed database transaction does not leave partial point or stock changes. The current integration verifies checkout status through the PayMongo API; the mounted API routes do not include a payment webhook endpoint.
 
 ### Inventory changes
 
@@ -133,11 +133,12 @@ The API groups functionality into these areas:
 
 - **Identity and access:** login, refresh, logout, password changes, users, roles, and permissions.
 - **Catalog and suppliers:** products, categories, barcodes, supplier relationships, supplier delivery data, and customers.
+- **Customer management and loyalty:** registered and anonymous member accounts, printable QR cards for anonymous loyalty, purchase history, member points, and server-managed member/wholesale pricing.
 - **Inventory:** stock receipts, stock-out, adjustments, stock movements, low-stock notifications, and held sales.
 - **Sales and payments:** POS completion, sales history, refunds, and PayMongo GCash checkout.
 - **Operations and reporting:** dashboard metrics, reports, settings, notifications, and audit logs.
 
-`ERD.md` documents the persisted models, including products, sales, inventory movements, payments, roles, permissions, notifications, and audit records.
+`ERD.md` documents the persisted models, including customer pricing fields, loyalty transactions, sales, inventory movements, payments, roles, permissions, notifications, and audit records.
 
 ## Security and cross-cutting behavior
 
