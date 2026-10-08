@@ -792,72 +792,115 @@ export function ResourcePage({ title, endpoint, columns, showCreate = true }: Re
         </div>
       </div>
       {showProductForm && (
-        <Card>
-          <form className="space-y-4" onSubmit={submitProduct}>
-            <div className="flex items-center justify-between gap-3">
-              <h2 className="font-semibold">{editingProductId ? "Edit product" : "Add product"}</h2>
-              <button type="button" className="rounded-md border border-line p-2 dark:border-slate-700" onClick={closeProductForm} aria-label="Close product form"><X size={18} /></button>
+        <Card className="mx-auto max-w-6xl overflow-hidden !p-0">
+          <form onSubmit={submitProduct}>
+            <div className="flex items-start justify-between gap-4 border-b border-line px-5 py-4 dark:border-slate-700 sm:px-6">
+              <div>
+                <h2 className="text-lg font-bold">{editingProductId ? "Edit product" : "Add product"}</h2>
+                <p className="mt-1 text-sm text-slate-500">Enter the product details, pricing, and starting stock.</p>
+              </div>
+              <button type="button" className="rounded-lg border border-line p-2 text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800" onClick={closeProductForm} aria-label="Close product form"><X size={18} /></button>
             </div>
-            {importedSource && (
-              <div className="rounded-md border border-teal-200 bg-teal-50 p-3 text-sm text-teal-900">
-                Product details were imported from {importedSource === "upcitemdb" ? "UPCitemdb" : "Open Food Facts"}. Review and edit them before saving. Price, cost, stock, supplier, and local category still need your local values.
-              </div>
-            )}
-            <div className="grid gap-3 md:grid-cols-3">
-              <label className="space-y-1">
-                <Input required placeholder="Product name" value={productForm.name} onChange={(event) => updateProductForm("name", event.target.value)} />
-                {importedSource && <span className="text-xs text-teal-700">Imported from external API</span>}
-              </label>
-              <div className="flex gap-2">
-                <Input placeholder="SKU" value={productForm.sku} onChange={(event) => updateProductForm("sku", event.target.value)} />
-                <Button type="button" className="shrink-0 bg-slate-700 px-3 hover:bg-slate-800" onClick={() => updateProductForm("sku", generateSkuFromBarcode(productForm.barcode))}><Hash size={16} /> Generate</Button>
-              </div>
-              <div className="flex gap-2">
-                <Input required placeholder="Barcode" value={productForm.barcode} onChange={(event) => updateProductForm("barcode", event.target.value)} />
-                <Button type="button" className="shrink-0 bg-slate-700 px-3 hover:bg-slate-800" onClick={() => updateProductForm("barcode", generateProductBarcode())}><Barcode size={16} /> Generate</Button>
-                <Button type="button" className="shrink-0 bg-slate-700 px-3 hover:bg-slate-800" onClick={() => setShowBarcodeCamera((isOpen) => !isOpen)}><Camera size={16} /> Scan</Button>
-              </div>
-              <select required className="h-10 w-full rounded-md border border-line bg-white px-3 text-sm outline-none focus:border-brand dark:border-slate-700 dark:bg-slate-950" value={productForm.categoryId} onChange={(event) => updateProductForm("categoryId", event.target.value)}>
-                <option value="">Select category</option>
-                {categories.map((category) => <option key={String(category.id)} value={String(category.id)}>{text(category.name)}</option>)}
-              </select>
-              <select className="h-10 w-full rounded-md border border-line bg-white px-3 text-sm outline-none focus:border-brand dark:border-slate-700 dark:bg-slate-950" value={productForm.primarySupplierId} onChange={(event) => updateProductForm("primarySupplierId", event.target.value)}>
-                <option value="">No supplier</option>
-                {suppliers.map((supplier) => <option key={String(supplier.id)} value={String(supplier.id)}>{text(supplier.name)}</option>)}
-              </select>
-              <Input placeholder="Unit" value={productForm.unit} onChange={(event) => updateProductForm("unit", event.target.value)} />
-              <label className="space-y-1">
-                <Input placeholder="Product image URL" value={productForm.imageUrl} onChange={(event) => updateProductForm("imageUrl", event.target.value)} />
-                {importedSource && productForm.imageUrl && <span className="text-xs text-teal-700">Imported image URL</span>}
-              </label>
-              <Input required={!editingProductId || hasPermission("products.view_cost")} disabled={Boolean(editingProductId) && !hasPermission("products.view_cost")} min="0" step="0.01" type="number" placeholder="Cost price" value={productForm.costPrice} onChange={(event) => updateProductForm("costPrice", event.target.value)} />
-              <Input required min="0" step="0.01" type="number" placeholder="Selling price" value={productForm.sellingPrice} onChange={(event) => updateProductForm("sellingPrice", event.target.value)} />
-              <Input disabled={Boolean(editingProductId)} title="Use Inventory adjustment to change existing stock" required min="0" step="1" type="number" placeholder="Current stock" value={productForm.currentStock} onChange={(event) => updateProductForm("currentStock", event.target.value)} />
-              <Input required min="0" step="1" type="number" placeholder="Reorder level" value={productForm.reorderLevel} onChange={(event) => updateProductForm("reorderLevel", event.target.value)} />
-              <label className="flex h-10 items-center gap-2 rounded-md border border-line px-3 text-sm dark:border-slate-700">
-                <input type="checkbox" checked={productForm.tracksExpiration} onChange={(event) => updateProductForm("tracksExpiration", event.target.checked)} />
-                Tracks expiration
-              </label>
-              <label className="space-y-1 md:col-span-3">
-                <Input placeholder="Description" value={productForm.description} onChange={(event) => updateProductForm("description", event.target.value)} />
-                {importedSource && productForm.description && <span className="text-xs text-teal-700">Imported from external API</span>}
-              </label>
+            <div className="space-y-5 p-4 sm:p-6">
+              {importedSource && (
+                <div className="rounded-xl border border-teal-200 bg-teal-50 p-4 text-sm text-teal-900 dark:border-teal-900 dark:bg-teal-950/50 dark:text-teal-100">
+                  Product details came from {importedSource === "upcitemdb" ? "UPCitemdb" : "Open Food Facts"}. Review the imported information and enter your local prices, stock, supplier, and category before saving.
+                </div>
+              )}
+
+              <section className="space-y-4 rounded-xl border border-line p-4 dark:border-slate-700 sm:p-5">
+                <div><h3 className="font-semibold">Product details</h3><p className="mt-1 text-xs text-slate-500">Name, identifiers, and catalog information.</p></div>
+                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                  <label htmlFor="product-name" className="grid gap-1.5 text-sm font-medium md:col-span-2 xl:col-span-2">Product name
+                    <Input id="product-name" aria-label="Product name" required placeholder="e.g. Bottled water 500 ml" value={productForm.name} onChange={(event) => updateProductForm("name", event.target.value)} />
+                    {importedSource && <span className="text-xs font-normal text-teal-700">Imported from external API</span>}
+                  </label>
+                  <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto] xl:col-span-2">
+                    <label htmlFor="product-sku" className="grid gap-1.5 text-sm font-medium">SKU
+                      <Input id="product-sku" aria-label="SKU" placeholder="Optional stock keeping unit" value={productForm.sku} onChange={(event) => updateProductForm("sku", event.target.value)} />
+                    </label>
+                    <Button type="button" className="self-end bg-slate-700 hover:bg-slate-800" aria-label="Generate SKU" onClick={() => updateProductForm("sku", generateSkuFromBarcode(productForm.barcode))}><Hash size={16} /> Generate</Button>
+                  </div>
+                  <div className="space-y-1.5 md:col-span-2 xl:col-span-4">
+                    <label htmlFor="product-barcode" className="block text-sm font-medium">Barcode <span className="text-red-600">*</span></label>
+                    <div className="flex flex-col gap-2 sm:flex-row">
+                      <Input id="product-barcode" aria-label="Barcode" required className="min-w-0 flex-1" placeholder="Scan or enter a barcode" value={productForm.barcode} onChange={(event) => updateProductForm("barcode", event.target.value)} />
+                      <div className="flex gap-2">
+                        <Button type="button" className="flex-1 bg-slate-700 hover:bg-slate-800 sm:flex-none" aria-label="Generate barcode" onClick={() => updateProductForm("barcode", generateProductBarcode())}><Barcode size={16} /> Generate</Button>
+                        <Button type="button" className="flex-1 bg-slate-700 hover:bg-slate-800 sm:flex-none" aria-label="Scan barcode" onClick={() => setShowBarcodeCamera((isOpen) => !isOpen)}><Camera size={16} /> Scan</Button>
+                      </div>
+                    </div>
+                  </div>
+                  <label htmlFor="product-category" className="grid gap-1.5 text-sm font-medium">Category
+                    <select id="product-category" required className="h-11 w-full rounded-lg border border-line bg-white px-3 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20 dark:border-slate-700 dark:bg-slate-950" value={productForm.categoryId} onChange={(event) => updateProductForm("categoryId", event.target.value)}>
+                      <option value="">Select category</option>
+                      {categories.map((category) => <option key={String(category.id)} value={String(category.id)}>{text(category.name)}</option>)}
+                    </select>
+                  </label>
+                  <label htmlFor="product-supplier" className="grid gap-1.5 text-sm font-medium">Primary supplier <span className="text-xs font-normal text-slate-500">Optional</span>
+                    <select id="product-supplier" className="h-11 w-full rounded-lg border border-line bg-white px-3 text-sm outline-none focus:border-brand focus:ring-2 focus:ring-brand/20 dark:border-slate-700 dark:bg-slate-950" value={productForm.primarySupplierId} onChange={(event) => updateProductForm("primarySupplierId", event.target.value)}>
+                      <option value="">No supplier</option>
+                      {suppliers.map((supplier) => <option key={String(supplier.id)} value={String(supplier.id)}>{text(supplier.name)}</option>)}
+                    </select>
+                  </label>
+                  <label htmlFor="product-unit" className="grid gap-1.5 text-sm font-medium">Unit
+                    <Input id="product-unit" aria-label="Unit" placeholder="pcs, bottle, kg..." value={productForm.unit} onChange={(event) => updateProductForm("unit", event.target.value)} />
+                  </label>
+                  <label htmlFor="product-image-url" className="grid gap-1.5 text-sm font-medium">Product image URL <span className="text-xs font-normal text-slate-500">Optional</span>
+                    <Input id="product-image-url" aria-label="Product image URL" placeholder="https://..." value={productForm.imageUrl} onChange={(event) => updateProductForm("imageUrl", event.target.value)} />
+                    {importedSource && productForm.imageUrl && <span className="text-xs font-normal text-teal-700">Imported image URL</span>}
+                  </label>
+                  <label htmlFor="product-description" className="grid gap-1.5 text-sm font-medium md:col-span-2 xl:col-span-4">Description <span className="text-xs font-normal text-slate-500">Optional</span>
+                    <Input id="product-description" aria-label="Description" placeholder="Add product notes or details" value={productForm.description} onChange={(event) => updateProductForm("description", event.target.value)} />
+                    {importedSource && productForm.description && <span className="text-xs font-normal text-teal-700">Imported from external API</span>}
+                  </label>
+                </div>
+              </section>
+
+              <section className="space-y-4 rounded-xl border border-line p-4 dark:border-slate-700 sm:p-5">
+                <div><h3 className="font-semibold">Pricing and inventory</h3><p className="mt-1 text-xs text-slate-500">Prices are per unit. Use Inventory adjustment to change stock after the product is created.</p></div>
+                <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                  <label htmlFor="product-cost-price" className="grid gap-1.5 text-sm font-medium">Cost price (PHP)
+                    <Input id="product-cost-price" aria-label="Cost price in PHP" required={!editingProductId || hasPermission("products.view_cost")} disabled={Boolean(editingProductId) && !hasPermission("products.view_cost")} min="0" step="0.01" type="number" placeholder="0.00" value={productForm.costPrice} onChange={(event) => updateProductForm("costPrice", event.target.value)} />
+                  </label>
+                  <label htmlFor="product-selling-price" className="grid gap-1.5 text-sm font-medium">Selling price (PHP)
+                    <Input id="product-selling-price" aria-label="Selling price in PHP" required min="0" step="0.01" type="number" placeholder="0.00" value={productForm.sellingPrice} onChange={(event) => updateProductForm("sellingPrice", event.target.value)} />
+                  </label>
+                  <label htmlFor="product-current-stock" className="grid gap-1.5 text-sm font-medium">Starting stock
+                    <Input id="product-current-stock" disabled={Boolean(editingProductId)} title="Use Inventory adjustment to change existing stock" required min="0" step="1" type="number" value={productForm.currentStock} onChange={(event) => updateProductForm("currentStock", event.target.value)} />
+                  </label>
+                  <label htmlFor="product-reorder-level" className="grid gap-1.5 text-sm font-medium">Low-stock alert level
+                    <Input id="product-reorder-level" required min="0" step="1" type="number" value={productForm.reorderLevel} onChange={(event) => updateProductForm("reorderLevel", event.target.value)} />
+                  </label>
+                  <label className="flex min-h-11 items-center gap-3 rounded-lg border border-line px-3 text-sm font-medium dark:border-slate-700 sm:col-span-2 xl:col-span-4">
+                    <input type="checkbox" className="h-4 w-4 accent-brand" checked={productForm.tracksExpiration} onChange={(event) => updateProductForm("tracksExpiration", event.target.checked)} />
+                    Track expiration dates for this product
+                  </label>
+                </div>
+              </section>
+
+              {productForm.imageUrl && (
+                <div className="flex items-center gap-4 rounded-xl border border-line bg-slate-50 p-3 text-sm dark:border-slate-700 dark:bg-slate-950">
+                  <img className="h-16 w-16 rounded-lg bg-white object-contain" src={productForm.imageUrl} alt="" onError={(event) => { event.currentTarget.style.display = "none"; }} />
+                  <span className="text-slate-600 dark:text-slate-300">Product image preview</span>
+                </div>
+              )}
+              {showBarcodeCamera && <CameraBarcodeScanner onClose={() => setShowBarcodeCamera(false)} onScan={(scannedBarcode) => { updateProductForm("barcode", scannedBarcode); setShowBarcodeCamera(false); }} />}
+
+              <section className="space-y-4 rounded-xl border border-line p-4 dark:border-slate-700 sm:p-5">
+                <div><h3 className="font-semibold">Barcode labels</h3><p className="mt-1 text-xs text-slate-500">Preview the barcode and choose how many labels to print.</p></div>
+                <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_160px_auto] lg:items-end">
+                  <BarcodeLabel value={productForm.barcode} productName={productForm.name || "New product"} price={productForm.sellingPrice ? `PHP ${Number(productForm.sellingPrice).toFixed(2)}` : undefined} />
+                  <label htmlFor="barcode-label-quantity" className="grid gap-1.5 text-sm font-medium">Label quantity
+                    <Input id="barcode-label-quantity" min="1" step="1" type="number" value={labelQuantity} onChange={(event) => setLabelQuantity(event.target.value)} />
+                  </label>
+                  <Button type="button" className="bg-slate-700 hover:bg-slate-800" disabled={!productForm.barcode.trim()} onClick={printBarcodeLabels}><Printer size={16} /> Print barcode</Button>
+                </div>
+              </section>
             </div>
-            {productForm.imageUrl && (
-              <div className="flex items-center gap-3 rounded-md border border-line p-3 text-sm dark:border-slate-700">
-                <img className="h-20 w-20 rounded-md object-contain" src={productForm.imageUrl} alt="" onError={(event) => { event.currentTarget.style.display = "none"; }} />
-                <span className="text-slate-600 dark:text-slate-300">Product image preview</span>
-              </div>
-            )}
-            {showBarcodeCamera && <CameraBarcodeScanner onClose={() => setShowBarcodeCamera(false)} onScan={(scannedBarcode) => { updateProductForm("barcode", scannedBarcode); setShowBarcodeCamera(false); }} />}
-            <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_140px_auto] md:items-end">
-              <BarcodeLabel value={productForm.barcode} productName={productForm.name || "New product"} price={productForm.sellingPrice ? `PHP ${Number(productForm.sellingPrice).toFixed(2)}` : undefined} />
-              <Input min="1" step="1" type="number" placeholder="Labels" value={labelQuantity} onChange={(event) => setLabelQuantity(event.target.value)} />
-              <Button type="button" className="bg-slate-700 hover:bg-slate-800" disabled={!productForm.barcode.trim()} onClick={printBarcodeLabels}><Printer size={16} /> Print barcode</Button>
-            </div>
-            <div className="flex justify-end gap-2">
+            <div className="flex flex-col-reverse gap-2 border-t border-line bg-slate-50 px-5 py-4 dark:border-slate-700 dark:bg-slate-950 sm:flex-row sm:justify-end sm:px-6">
               <Button type="button" className="bg-slate-700 hover:bg-slate-800" onClick={closeProductForm}>Cancel</Button>
-              <Button type="submit" disabled={createProduct.isPending || updateProduct.isPending}>{createProduct.isPending || updateProduct.isPending ? "Saving..." : editingProductId ? "Update product" : "Save product"}</Button>
+              <Button type="submit" busy={createProduct.isPending || updateProduct.isPending}>{createProduct.isPending || updateProduct.isPending ? "Saving..." : editingProductId ? "Update product" : "Save product"}</Button>
             </div>
           </form>
         </Card>
