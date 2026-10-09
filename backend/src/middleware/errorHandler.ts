@@ -7,7 +7,7 @@ export function notFound(req: Request, _res: Response, next: NextFunction) {
   next(new AppError(`Route not found: ${req.method} ${req.originalUrl}`, 404));
 }
 
-export function errorHandler(err: unknown, _req: Request, res: Response, _next: NextFunction) {
+export function errorHandler(err: unknown, req: Request, res: Response, _next: NextFunction) {
   void _next;
   if (err instanceof ZodError) {
     return res.status(422).json({
@@ -32,10 +32,24 @@ export function errorHandler(err: unknown, _req: Request, res: Response, _next: 
       P2025: [404, "Record not found."],
       P2034: [409, "This record changed during your request. Please try again."]
     };
-    const [status, message] = messages[err.code] ?? [500, "Unable to complete this request."];
+    const mapped = messages[err.code];
+    if (!mapped) {
+      const databaseCode = typeof err.meta?.code === "string" ? err.meta.code : undefined;
+      console.error("Unhandled Prisma request error", {
+        code: err.code,
+        ...(databaseCode ? { databaseCode } : {}),
+        method: req.method,
+        path: req.path
+      });
+    }
+    const [status, message] = mapped ?? [500, "Unable to complete this request."];
     return res.status(status).json({ success: false, message, errors: [] });
   }
   if (err instanceof SyntaxError && "body" in err) return res.status(400).json({ success: false, message: "Invalid JSON request.", errors: [] });
-  console.error("Unhandled API error", { name: err instanceof Error ? err.name : "UnknownError" });
+  console.error("Unhandled API error", {
+    name: err instanceof Error ? err.name : "UnknownError",
+    method: req.method,
+    path: req.path
+  });
   return res.status(500).json({ success: false, message: "Unable to complete this request. Please try again.", errors: [] });
 }
