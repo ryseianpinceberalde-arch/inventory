@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { FormEvent, useEffect, useState } from "react";
 import QRCode from "qrcode";
-import { Archive, Check, Download, Eye, Pencil, Plus, Printer, QrCode, Search } from "lucide-react";
+import { Archive, Check, Download, Eye, Pencil, Printer, QrCode, Search } from "lucide-react";
 import toast from "react-hot-toast";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { Button } from "../components/ui/Button";
@@ -211,7 +211,7 @@ export function CustomersPage() {
   return <div className="space-y-5">
     <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
       <div><h1 className="text-2xl font-bold">Customers</h1><p className="text-sm text-slate-500">Add customer details and manage member loyalty accounts.</p></div>
-      {hasPermission("customers.create") && <Button type="button" onClick={openAddForm}><Plus size={16} /> Add customer</Button>}
+      {hasPermission("customers.create") && <Button type="button" className="bg-slate-700" onClick={openAddForm}><QrCode size={16} /> Add customer</Button>}
     </div>
 
     {hasPermission("settings.update") && <Card>
