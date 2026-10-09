@@ -563,7 +563,7 @@ export function POS() {
           {hasPermission("customers.view") && <div className="space-y-2">
             <span className="block text-sm font-medium">Customer · walk-in checkout is available</span>
             {selectedCustomer ? <div className="flex items-center justify-between gap-2 rounded-md border border-teal-200 bg-teal-50 p-3 text-sm text-teal-900 dark:border-teal-900 dark:bg-teal-950 dark:text-teal-200">
-              <div><strong>{selectedCustomer.fullName}</strong><div className="text-xs">{selectedCustomer.phone || "No phone number"} · {selectedCustomer.customerType} · {selectedCustomer.loyaltyPoints} points · earns {pointsToEarn} this sale</div></div>
+              <div><strong>{selectedCustomer.fullName}</strong><div className="text-xs">{selectedCustomer.phone || "No phone number"} · {selectedCustomer.loyaltyPoints} points · earns {pointsToEarn} this sale</div></div>
               <Button type="button" className="h-8 bg-slate-700 px-3 text-xs" onClick={() => { setCustomerId(""); setLoyaltyPointsRedeemed(0); }}>Change</Button>
             </div> : <>
               <div className="flex gap-2">
@@ -573,7 +573,7 @@ export function POS() {
               {isMemberQrOpen && <div className="mt-3 max-w-md"><CameraBarcodeScanner compact qrOnly onClose={() => setIsMemberQrOpen(false)} onScan={(value) => selectMemberFromQr(value, true)} /></div>}
               {customerSearchTerm && <div className="max-h-56 overflow-y-auto rounded-md border border-line dark:border-slate-700">
                 {matchingCustomers.length > 0 ? matchingCustomers.map((customer) => <button key={customer.id} type="button" className="flex w-full items-center justify-between gap-3 border-b border-line px-3 py-2 text-left text-sm last:border-b-0 hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800" onClick={() => { setCustomerId(customer.id); setLoyaltyPointsRedeemed(0); setCustomerSearch(""); }}>
-                  <span><strong className="block">{customer.fullName}</strong><span className="text-xs text-slate-500">{customer.phone || "No phone number"} · {customer.customerType}</span></span><span className="shrink-0 text-xs">{customer.loyaltyPoints} pts</span>
+                  <span><strong className="block">{customer.fullName}</strong><span className="text-xs text-slate-500">{customer.phone || "No phone number"}</span></span><span className="shrink-0 text-xs">{customer.loyaltyPoints} pts</span>
                 </button>) : <div className="p-3 text-sm text-slate-500">No active customer found. {hasPermission("customers.create") && <button type="button" className="font-medium text-brand underline" onClick={() => navigate("/customers?returnTo=pos")}>Add customer</button>}</div>}
               </div>}
               {hasPermission("customers.create") && <button type="button" className="text-xs font-medium text-brand underline" onClick={() => navigate("/customers?returnTo=pos")}>Add new customer</button>}

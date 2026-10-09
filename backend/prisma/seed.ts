@@ -255,7 +255,7 @@ async function main() {
         fullName,
         phone: `092700000${String(i).padStart(2, "0")}`,
         email: `customer${i}@example.com`,
-        customerType: i === 1 ? "Walk-in" : i % 4 === 0 ? "Wholesale" : i % 3 === 0 ? "Member" : "Regular",
+        customerType: "Member",
         loyaltyPoints: i * 5
       },
       create: {
@@ -263,7 +263,7 @@ async function main() {
         fullName,
         phone: `092700000${String(i).padStart(2, "0")}`,
         email: `customer${i}@example.com`,
-        customerType: i === 1 ? "Walk-in" : i % 4 === 0 ? "Wholesale" : i % 3 === 0 ? "Member" : "Regular",
+        customerType: "Member",
         loyaltyPoints: i * 5
       }
     });

@@ -265,7 +265,6 @@ function getGenericResourceConfig(endpoint: string, title: string): GenericResou
         fullName: "",
         phone: "",
         email: "",
-        customerType: "Walk-in",
         loyaltyPoints: "0",
         creditBalance: "0",
         birthday: "",
@@ -277,16 +276,6 @@ function getGenericResourceConfig(endpoint: string, title: string): GenericResou
         { key: "fullName", placeholder: "Customer name", required: true },
         { key: "phone", placeholder: "Phone" },
         { key: "email", placeholder: "Email", type: "email" },
-        {
-          key: "customerType",
-          placeholder: "Customer type",
-          options: [
-            { value: "Walk-in", label: "Walk-in" },
-            { value: "Regular", label: "Regular" },
-            { value: "Member", label: "Member" },
-            { value: "Wholesale", label: "Wholesale" }
-          ]
-        },
         { key: "loyaltyPoints", placeholder: "Loyalty points", type: "number" },
         { key: "creditBalance", placeholder: "Credit balance", type: "number", min: "0", max: MAX_MONEY_INPUT, step: "0.01" },
         { key: "birthday", placeholder: "Birthday", type: "date" },

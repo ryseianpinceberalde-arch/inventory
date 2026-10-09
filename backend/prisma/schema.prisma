@@ -281,7 +281,7 @@ model Customer {
   phone          String?
   email          String?
   address        String?
-  customerType   String        @default("Regular")
+  customerType   String        @default("Member")
   loyaltyPoints  Int           @default(0)
   creditBalance  Decimal       @default(0) @db.Decimal(12, 2)
   birthday       DateTime?     @db.Date

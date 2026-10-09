@@ -8,7 +8,6 @@ type CustomerInput = {
   phone: string;
   email?: string;
   address?: string;
-  customerType?: string;
 };
 
 function normalizedPhone(value: string) {
@@ -18,7 +17,7 @@ function normalizedPhone(value: string) {
 async function ensurePhoneAvailable(tx: Prisma.TransactionClient, phone: string, excludingId?: string) {
   const normalized = normalizedPhone(phone);
   if (normalized.length < 7) throw new AppError("Enter a valid phone number.", 422);
-  await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${normalized}))`;
+  await tx.$queryRaw`SELECT 1 FROM pg_advisory_xact_lock(hashtext(${normalized}))`;
   const matches = await tx.$queryRaw<Array<{ id: string }>>`
     SELECT id FROM "Customer"
     WHERE regexp_replace(COALESCE(phone, ''), '[^0-9]', '', 'g') = ${normalized}
@@ -37,7 +36,7 @@ export async function createCustomer(input: CustomerInput) {
         phone: input.phone.trim(),
         email: input.email?.trim() || null,
         address: input.address?.trim() || null,
-        customerType: input.customerType ?? "Regular",
+        customerType: "Member",
         loyaltyPoints: 0
       }
     });
@@ -71,7 +70,6 @@ export async function updateCustomer(id: string, input: Partial<CustomerInput>) 
         ...(input.phone !== undefined ? { phone: input.phone.trim() } : {}),
         ...(input.email !== undefined ? { email: input.email.trim() || null } : {}),
         ...(input.address !== undefined ? { address: input.address.trim() || null } : {}),
-        ...(input.customerType !== undefined ? { customerType: input.customerType } : {})
       }
     });
   });

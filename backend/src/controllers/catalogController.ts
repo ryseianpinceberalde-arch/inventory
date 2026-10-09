@@ -303,14 +303,11 @@ export const updateSupplier = asyncHandler(async (req: Request, res: Response) =
 });
 
 export const listCustomers = asyncHandler(async (req: Request, res: Response) => {
-  const customerType = typeof req.query.customerType === "string" ? req.query.customerType : undefined;
-  if (customerType && !["Regular", "Member", "Wholesale", "Walk-in"].includes(customerType)) throw new AppError("Invalid customer type filter", 422);
   const status = typeof req.query.status === "string" ? req.query.status.toUpperCase() : "ALL";
   if (!(["ALL", "ACTIVE", "ARCHIVED"] as string[]).includes(status)) throw new AppError("Invalid customer status filter", 422);
   const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
   const phoneDigits = search.replace(/\D/g, "");
   const where: Prisma.CustomerWhereInput = {
-    customerType: customerType === "Regular" ? { in: ["Regular", "Walk-in"] } : customerType,
     status: status === "ALL" ? undefined : status as ProductStatus,
     ...(search ? { OR: [
       { fullName: { contains: search, mode: "insensitive" } },
@@ -354,9 +351,6 @@ export const createAnonymousMember = asyncHandler(async (req: Request, res: Resp
 export const updateCustomer = asyncHandler(async (req: Request, res: Response) => {
   const old = await prisma.customer.findUnique({ where: { id: req.params.id } });
   if (!old) throw new AppError("Customer not found", 404);
-  if (req.body.customerType !== undefined && req.body.customerType !== old.customerType && !req.user?.permissions.includes("settings.update")) {
-    throw new AppError("Only authorized administrators can change customer types.", 403);
-  }
   const customer = await customers.updateCustomer(req.params.id, req.body);
   await audit({ userId: req.user?.id, action: "CUSTOMER_UPDATE", module: "CUSTOMERS", recordId: customer.id, oldData: old, newData: customer });
   return ok(res, "Customer updated", customer);

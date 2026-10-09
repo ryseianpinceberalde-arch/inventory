@@ -14,8 +14,7 @@ import { peso } from "../lib/format";
 import { api, errorMessage, getData } from "../services/api";
 import type { ApiResponse } from "../types/api";
 
-type CustomerType = "Regular" | "Member" | "Wholesale";
-type CustomerForm = { fullName: string; phone: string; email: string; address: string; customerType: CustomerType };
+type CustomerForm = { fullName: string; phone: string; email: string; address: string };
 
 interface Customer {
   id: string;
@@ -23,7 +22,7 @@ interface Customer {
   phone: string | null;
   email: string | null;
   address: string | null;
-  customerType: string;
+  customerType: "Member";
   loyaltyPoints: number;
   status: "ACTIVE" | "ARCHIVED";
   totalPurchases: number;
@@ -60,11 +59,7 @@ interface LoyaltySettings {
   redemptionValue: number;
 }
 
-const emptyForm: CustomerForm = { fullName: "", phone: "", email: "", address: "", customerType: "Regular" };
-
-function customerTypeLabel(value: string) {
-  return value === "Walk-in" ? "Regular" : value;
-}
+const emptyForm: CustomerForm = { fullName: "", phone: "", email: "", address: "" };
 
 function formatDate(value: string) {
   return new Date(value).toLocaleString("en-PH", { timeZone: "Asia/Manila" });
@@ -77,7 +72,6 @@ export function CustomersPage() {
   const { id: profileId } = useParams();
   const [searchParams] = useSearchParams();
   const [search, setSearch] = useState("");
-  const [customerTypeFilter, setCustomerTypeFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [form, setForm] = useState<CustomerForm>(emptyForm);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -89,7 +83,7 @@ export function CustomersPage() {
   const [redemptionValue, setRedemptionValue] = useState("1");
   const [adjustmentPoints, setAdjustmentPoints] = useState("");
   const [adjustmentReason, setAdjustmentReason] = useState("");
-  const listUrl = `/customers?${new URLSearchParams({ ...(search.trim() ? { search: search.trim() } : {}), ...(customerTypeFilter ? { customerType: customerTypeFilter } : {}), status: statusFilter }).toString()}`;
+  const listUrl = `/customers?${new URLSearchParams({ ...(search.trim() ? { search: search.trim() } : {}), status: statusFilter }).toString()}`;
   const { data: customers = [], isLoading, isError, error, refetch } = useQuery({ queryKey: [listUrl], queryFn: () => getData<Customer[]>(listUrl) });
   const { data: detail, isLoading: detailLoading, isError: detailError } = useQuery({ queryKey: ["/customers", profileId], queryFn: () => getData<CustomerDetails>(`/customers/${profileId}`), enabled: Boolean(profileId) });
   const { data: loyaltySettings } = useQuery({ queryKey: ["/customers/loyalty-settings"], queryFn: () => getData<LoyaltySettings>("/customers/loyalty-settings") });
@@ -123,17 +117,24 @@ export function CustomersPage() {
   ]);
   const saveCustomer = useMutation({
     mutationFn: async () => {
-      const payload = { fullName: form.fullName.trim(), phone: form.phone.trim(), email: form.email.trim(), address: form.address.trim(), customerType: form.customerType };
+      const payload = { fullName: form.fullName.trim(), phone: form.phone.trim(), email: form.email.trim(), address: form.address.trim() };
       return editingId ? api.put(`/customers/${editingId}`, payload) : api.post<ApiResponse<Customer>>("/customers", payload);
     },
     onSuccess: async (response) => {
       const customer = response.data.data as Customer;
+      const showMemberQr = !editingId;
+      const returnToPosAfterQr = searchParams.get("returnTo") === "pos";
       toast.success(editingId ? "Customer updated" : "Customer added");
       setShowForm(false);
       setEditingId(null);
       setForm(emptyForm);
       await invalidateCustomers();
-      if (!editingId && searchParams.get("returnTo") === "pos") navigate(`/pos?customerId=${customer.id}`);
+      if (showMemberQr) {
+        setReturnToPosAfterCard(returnToPosAfterQr);
+        setQrCustomer(customer);
+      } else if (!editingId && returnToPosAfterQr) {
+        navigate(`/pos?customerId=${customer.id}`);
+      }
     },
     onError: (saveError) => toast.error(errorMessage(saveError, "Could not save customer"))
   });
@@ -187,7 +188,7 @@ export function CustomersPage() {
 
   function openEditForm(customer: Customer) {
     setEditingId(customer.id);
-    setForm({ fullName: customer.fullName, phone: customer.phone ?? "", email: customer.email ?? "", address: customer.address ?? "", customerType: (customer.customerType === "Walk-in" ? "Regular" : customer.customerType) as CustomerType });
+    setForm({ fullName: customer.fullName, phone: customer.phone ?? "", email: customer.email ?? "", address: customer.address ?? "" });
     setShowForm(true);
   }
 
@@ -204,7 +205,6 @@ export function CustomersPage() {
     navigate(`/pos?customerId=${encodeURIComponent(customerId)}`);
   }
 
-  const canUpdateType = hasPermission("settings.update");
   const qrDataUrl = qrCustomer && qrImage?.customerId === qrCustomer.id ? qrImage.dataUrl : "";
   const loyaltyTransactions = detail?.loyaltyTransactions;
 
@@ -227,11 +227,8 @@ export function CustomersPage() {
     </Card>}
 
     <Card>
-      <div className="mb-4 grid gap-3 md:grid-cols-[minmax(0,1fr)_190px_170px]">
+      <div className="mb-4 grid gap-3 md:grid-cols-[minmax(0,1fr)_170px]">
         <label className="relative"><Search size={17} className="absolute left-3 top-3 text-slate-400" /><Input className="pl-9" aria-label="Search customers" placeholder="Search name, phone, or email" value={search} onChange={(event) => setSearch(event.target.value)} /></label>
-        <select aria-label="Filter customers by type" className="h-11 rounded-lg border border-line bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-950" value={customerTypeFilter} onChange={(event) => setCustomerTypeFilter(event.target.value)}>
-          <option value="">All customer types</option><option value="Regular">Regular</option><option value="Member">Member</option><option value="Wholesale">Wholesale</option>
-        </select>
         <select aria-label="Filter customers by status" className="h-11 rounded-lg border border-line bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-950" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
           <option value="ALL">All statuses</option><option value="ACTIVE">Active</option><option value="ARCHIVED">Deactivated</option>
         </select>
@@ -246,7 +243,7 @@ export function CustomersPage() {
               <td className="max-w-32 truncate py-3 pr-4 font-mono text-xs" title={customer.id}>{customer.id}</td>
               <td className="py-3 pr-4 font-semibold"><button className="text-left text-brand underline-offset-4 hover:underline" onClick={() => navigate(`/customers/${customer.id}`)}>{customer.fullName}</button></td>
               <td className="py-3 pr-4">{customer.phone || "—"}</td><td className="py-3 pr-4">{customer.email || "—"}</td>
-              <td className="py-3 pr-4"><span className="rounded-full bg-teal-50 px-2.5 py-1 text-xs font-semibold text-teal-800 dark:bg-teal-950 dark:text-teal-200">{customerTypeLabel(customer.customerType)}</span></td>
+              <td className="py-3 pr-4"><span className="rounded-full bg-teal-50 px-2.5 py-1 text-xs font-semibold text-teal-800 dark:bg-teal-950 dark:text-teal-200">{customer.customerType}</span></td>
               <td className="py-3 pr-4">{customer.loyaltyPoints.toLocaleString()}</td><td className="py-3 pr-4">{customer.totalPurchases}</td>
               <td className="whitespace-nowrap py-3 pr-4"><span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${customer.status === "ACTIVE" ? "bg-teal-50 text-teal-800 dark:bg-teal-950 dark:text-teal-200" : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300"}`}>{customer.status === "ACTIVE" ? "Active" : "Deactivated"}</span></td>
               <td className="whitespace-nowrap py-3">
@@ -268,8 +265,7 @@ export function CustomersPage() {
         <label className="grid gap-1 text-sm font-medium">Phone number<Input required minLength={7} maxLength={32} type="tel" value={form.phone} onChange={(event) => setForm((current) => ({ ...current, phone: event.target.value }))} /></label>
         <label className="grid gap-1 text-sm font-medium">Email (optional)<Input type="email" value={form.email} onChange={(event) => setForm((current) => ({ ...current, email: event.target.value }))} /></label>
         <label className="grid gap-1 text-sm font-medium">Address (optional)<Input value={form.address} onChange={(event) => setForm((current) => ({ ...current, address: event.target.value }))} /></label>
-        <label className="grid gap-1 text-sm font-medium">Customer type<select disabled={Boolean(editingId) && !canUpdateType} className="h-11 rounded-lg border border-line bg-white px-3 text-sm dark:border-slate-700 dark:bg-slate-950" value={form.customerType} onChange={(event) => setForm((current) => ({ ...current, customerType: event.target.value as CustomerType }))}><option value="Regular">Regular</option><option value="Member">Member</option><option value="Wholesale">Wholesale</option></select></label>
-        {form.customerType === "Member" && !editingId && <p className="text-xs text-slate-500">Members earn {peso(loyaltySettings?.earningSpend ?? 100)} in eligible purchases per point and can redeem each point for {peso(loyaltySettings?.redemptionValue ?? 1)}.</p>}
+        {!editingId && <p className="text-xs text-slate-500">All new customers are Members. Members earn {peso(loyaltySettings?.earningSpend ?? 100)} in eligible purchases per point and can redeem each point for {peso(loyaltySettings?.redemptionValue ?? 1)}. A loyalty QR card will appear after saving.</p>}
         <div className="flex flex-wrap items-center justify-between gap-2">
           {!editingId && searchParams.get("returnTo") === "pos" && <Button type="button" className="bg-slate-700" busy={createAnonymousMember.isPending} onClick={() => createAnonymousMember.mutate()}><QrCode size={16} /> Create anonymous member card</Button>}
           <div className="ml-auto flex gap-2"><Button type="button" className="bg-slate-700" onClick={() => setShowForm(false)}>Cancel</Button><Button type="submit" busy={saveCustomer.isPending}>{editingId ? "Save changes" : "Add customer"}</Button></div>
@@ -280,11 +276,11 @@ export function CustomersPage() {
     {profileId && <Modal title="Customer details" onClose={() => navigate("/customers")}>
       {detailLoading && <p className="text-sm text-slate-500">Loading customer details...</p>}
       {detailError && <p role="alert" className="text-sm text-red-600">Could not load customer history.</p>}
-      {detail && <div className="space-y-5">
-        {detail.customerType === "Member" && detail.status === "ACTIVE" && hasPermission("customers.create") && <Button type="button" onClick={() => { setReturnToPosAfterCard(false); setQrCustomer(detail); }}><QrCode size={16} /> Issue loyalty QR card</Button>}
+        {detail && <div className="space-y-5">
+        {detail.status === "ACTIVE" && hasPermission("customers.create") && <Button type="button" onClick={() => { setReturnToPosAfterCard(false); setQrCustomer(detail); }}><QrCode size={16} /> View loyalty QR card</Button>}
         <div className="grid gap-3 rounded-lg bg-slate-50 p-3 text-sm dark:bg-slate-800 sm:grid-cols-2">
           <div><span className="text-xs text-slate-500">Customer ID</span><p className="break-all font-mono text-xs">{detail.id}</p></div>
-          <div><span className="text-xs text-slate-500">Name and type</span><p className="font-semibold">{detail.fullName} · {customerTypeLabel(detail.customerType)}</p></div>
+          <div><span className="text-xs text-slate-500">Full name</span><p className="font-semibold">{detail.fullName}</p></div>
           <div><span className="text-xs text-slate-500">Phone</span><p>{detail.phone || "—"}</p></div><div><span className="text-xs text-slate-500">Email</span><p>{detail.email || "—"}</p></div>
           <div><span className="text-xs text-slate-500">Address</span><p>{detail.address || "—"}</p></div><div><span className="text-xs text-slate-500">Available points</span><p className="font-semibold">{detail.loyaltyPoints.toLocaleString()}</p></div>
         </div>

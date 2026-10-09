@@ -52,8 +52,7 @@ export const customerSchema = z.object({
   fullName: z.string().trim().min(2).max(160),
   phone: z.string().trim().min(7).max(32),
   email: z.string().email().optional().or(z.literal("")),
-  address: z.string().optional(),
-  customerType: z.enum(["Regular", "Member", "Wholesale"]).default("Regular")
+  address: z.string().optional()
 });
 
 export const loyaltySettingsSchema = z.object({

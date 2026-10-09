@@ -106,7 +106,7 @@ sequenceDiagram
 
     Cashier->>UI: Build sale and choose GCash
     UI->>API: Request hosted checkout with cart,<br/>customer, and requested points
-    API->>DB: Read customer type, point balance,<br/>product prices, and loyalty rules
+    API->>DB: Read member point balance,<br/>product prices, and loyalty rules
     API->>Pay: Create GCash checkout session
     Pay-->>API: Checkout URL and session ID
     API-->>UI: Checkout details
@@ -133,7 +133,7 @@ The API groups functionality into these areas:
 
 - **Identity and access:** login, refresh, logout, password changes, users, roles, and permissions.
 - **Catalog and suppliers:** products, categories, barcodes, supplier relationships, supplier delivery data, and customers.
-- **Customer management and loyalty:** registered and anonymous member accounts, printable QR cards for anonymous loyalty, purchase history, member points, and server-managed member/wholesale pricing.
+- **Customer management and loyalty:** registered and anonymous member accounts, printable QR cards, purchase history, member points, and server-managed member pricing. All saved customer accounts use the Member type; walk-in checkout without a saved customer uses retail pricing.
 - **Inventory:** stock receipts, stock-out, adjustments, stock movements, low-stock notifications, and held sales.
 - **Sales and payments:** POS completion, sales history, refunds, and PayMongo GCash checkout.
 - **Operations and reporting:** dashboard metrics, reports, settings, notifications, and audit logs.
